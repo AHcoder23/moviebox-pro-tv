@@ -1,0 +1,16 @@
+{
+  "name": "moviebox-pro-tv-tools",
+  "private": true,
+  "description": "Development tooling for the MovieBox Pro TV TizenBrew module. Not used on the TV.",
+  "scripts": {
+    "build": "node build.cjs",
+    "lint": "node lint.cjs",
+    "test": "node run-tests.cjs",
+    "preview": "node preview.cjs",
+    "screenshot": "node screenshot.cjs"
+  },
+  "devDependencies": {
+    "acorn": "^8.12.1",
+    "playwright-core": "^1.47.0"
+  }
+}

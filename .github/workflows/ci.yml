@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build, lint and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+
+      - name: Install tooling (acorn, playwright-core)
+        working-directory: tools
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        working-directory: tools
+        run: npx playwright-core install --with-deps --no-shell chromium
+
+      - name: Build tv.js and lint for ES5 / Tizen compatibility
+        run: |
+          node tools/build.cjs
+          node tools/lint.cjs
+
+      - name: Committed tv.js matches src/ (TizenBrew serves the committed file)
+        run: |
+          if ! git diff --quiet -- tv.js; then
+            echo "::error file=tv.js::tv.js is out of date. Run 'node tools/build.cjs' and commit tv.js together with the src/ change."
+            git diff --stat -- tv.js
+            exit 1
+          fi
+
+      - name: Tests (boot, site adapter, app flows, compatibility)
+        env:
+          PW_CHANNEL: chromium
+        run: node tools/run-tests.cjs
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts
+          path: test/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

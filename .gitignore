@@ -1,0 +1,4 @@
+tools/node_modules/
+test/artifacts/
+*.log
+.private/

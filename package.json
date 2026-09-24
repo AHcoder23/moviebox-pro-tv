@@ -1,13 +1,41 @@
 {
   "name": "moviebox-pro-tv",
-  "version": "0.2.0",
-  "description": "TV catalog interface and remote search keyboard for MovieBox Pro in TizenBrew.",
+  "version": "0.3.0",
+  "description": "Premium TV interface, remote search and playback handoff for MovieBox Pro in TizenBrew.",
   "license": "MIT",
   "packageType": "mods",
   "appName": "MovieBox Pro TV",
   "websiteURL": "https://www.movieboxpro.app/",
   "main": "tv.js",
   "evaluateScriptOnDocumentStart": false,
-  "keys": ["MediaPlay", "MediaPause", "MediaPlayPause", "MediaStop", "MediaRewind", "MediaFastForward", "ColorF3Blue", "Info"],
-  "files": ["tv.js", "README.md", "LICENSE"]
+  "keys": [
+    "MediaPlay",
+    "MediaPause",
+    "MediaPlayPause",
+    "MediaStop",
+    "MediaRewind",
+    "MediaFastForward",
+    "ColorF0Red",
+    "ColorF1Green",
+    "ColorF2Yellow",
+    "ColorF3Blue",
+    "Info",
+    "ChannelUp",
+    "ChannelDown",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+  ],
+  "files": [
+    "tv.js",
+    "README.md",
+    "LICENSE"
+  ]
 }

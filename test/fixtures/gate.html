@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0"/>
+		<meta http-equiv="X-UA-Compatible" content="ie=edge" />
+		<title>Private Garden | MovieBoxPro</title>
+        <link rel="icon" href="/static/img/favicon.ico" mce_href="/static/img/favicon.ico" type="image/x-icon"/>
+		<link rel="shortcut icon" href="/static/img/favicon.ico"/>
+		<link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png"/>
+		<link rel="stylesheet" href="/static/css/style.css?rand=windows161"/>
+        <style>
+        .door,.tip_1,.tip_2,.login_btn {
+            text-align: center;
+        }
+        .tip_1{
+            margin-top: 0.5rem;
+            font-size: 20px;
+        }
+        .tip_2 {
+            margin-top: 0.2rem;
+            font-size: 16px;
+        }
+
+        .tip_1 {
+            color: #FFF;
+        }
+        .tip_2 {
+            color: #A2A2A1;
+        }
+        .door{
+            margin-top: 1rem;
+        }
+        .door img{
+            width:70%;
+            height:70%;
+        }
+        .login_btn{
+            margin-top: 32px;
+        }
+        .login_btn img{
+            width:220px;
+        }
+        .login_btn p{
+            margin-top:24px;
+        }
+        .login_more img{
+            width:21px;
+        }
+        .other_login{
+            display:none;
+        }
+        </style>
+	</head>
+    	<body>
+        <div class="wrap" style="width:7.5rem;">
+            <div class="door">
+                <img src="/static/img/door.png" >
+            </div>
+            <div class="tip_1">PRIVATE GARDEN</div>
+            <div class="tip_2">This is a private club.</div>
+            <div class="login_btn">
+                                <p style="margin:0 0 24px;font-size:0;"><img src="/static/img/key.png" style="width:41px;" width="41" height="16"></p>
+                                <a href="/index/login"><img src="/static/img/google_login.png" width="220" height="40"></a>
+                                <p class="login_more"><img src="/static/img/more3.png" width="21" height="20"></p>
+                <div class="other_login">
+                                        <p><a href="/index/login/qrcode"><img src="/static/img/QR_login.png" width="220" height="40"></a></p>
+                                        <p><a href="/index/login/code_login"><img src="/static/img/code_login.png" width="220" height="40"></a></p>
+                                    </div>
+            </div>
+        </div>
+		<script type="text/javascript" src="/static/js/jquery-1.7.min.js"></script>
+		<script type="text/javascript" src="/static/js/index.js?rand=10211"></script>
+    </body>
+
+<script type="text/javascript">
+$(function(){
+    
+
+    $(".login_more img").click(function(){
+        $(".login_more").hide();
+        $(".other_login").show();
+    });
+});
+</script>
+</html>
+
+
+
+

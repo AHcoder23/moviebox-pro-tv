@@ -1,0 +1,5 @@
+# tv.js is served to TVs straight from the repository (jsDelivr) and CI compares it byte for byte with a fresh
+# build, which writes LF. Keep text files LF on every platform.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
