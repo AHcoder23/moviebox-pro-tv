@@ -16,7 +16,7 @@ This is a TizenBrew website module, not an Android APK conversion. It launches i
 ## Install or update
 
 1. Open **TizenBrew > Module Manager > Add GitHub Module**.
-2. Enter **`AHcoder23/moviebox-pro-tv@v0.2.0`**. Include **23**. Do not include `gh/` or a full URL.
+2. Enter **`AHcoder23/moviebox-pro-tv@391dbd7`**. This exact 0.2.0 build was verified on the download CDN. Include **23**. Do not include `gh/` or a full URL.
 3. Fully close and reopen TizenBrew, then launch **MovieBox Pro TV**.
 4. Check that TizenBrew lists version **0.2.0**. The new interface also shows **MovieBox Pro TV 0.2** in its footer.
 
