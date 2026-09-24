@@ -1,0 +1,13 @@
+{
+  "name": "moviebox-pro-tv",
+  "version": "0.1.0",
+  "description": "Experimental TV remote controls for the MovieBox Pro website in TizenBrew.",
+  "license": "MIT",
+  "packageType": "mods",
+  "appName": "MovieBox Pro TV",
+  "websiteURL": "https://www.movieboxpro.app/",
+  "main": "tv.js",
+  "evaluateScriptOnDocumentStart": false,
+  "keys": ["MediaPlay", "MediaPause", "MediaPlayPause", "MediaStop", "MediaRewind", "MediaFastForward", "ColorF3Blue", "Info"],
+  "files": ["tv.js", "README.md", "LICENSE"]
+}
