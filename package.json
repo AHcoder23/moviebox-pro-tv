@@ -1,7 +1,7 @@
 {
   "name": "moviebox-pro-tv",
-  "version": "0.1.0",
-  "description": "Experimental TV remote controls for the MovieBox Pro website in TizenBrew.",
+  "version": "0.2.0",
+  "description": "TV catalog interface and remote search keyboard for MovieBox Pro in TizenBrew.",
   "license": "MIT",
   "packageType": "mods",
   "appName": "MovieBox Pro TV",
