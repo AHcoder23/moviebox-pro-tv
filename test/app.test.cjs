@@ -552,7 +552,8 @@ async function main() {
     if (f.key !== 'movie:40102') await fail(page, 'Back should restore focus to movie:40102, got ' + JSON.stringify(f.key));
   });
 
-  flow('Play with quality "ask" opens [data-sheet=sources] with 2 rows; choosing one plays; Back returns to detail', { prefs: { quality: 'ask' } }, async page => {
+  // The website's own player (Settings > Built-in player off, and the built-in player's fallback).
+  flow('website player: Play with quality "ask" opens [data-sheet=sources] with 2 rows; choosing one plays; Back returns to detail', { prefs: { quality: 'ask', nativePlayer: false } }, async page => {
     await waitScreen(page, 'home');
     await waitFocus(page);
     await activate(page, '[data-key="movie:40102"]');
@@ -579,7 +580,7 @@ async function main() {
     await waitUntil(page, 'the detail heading "The Batman" after returning from the player', headingShows, 'The Batman', 8000);
   });
 
-  flow('preferred quality "best" auto-selects 4K; Right seeks +10 s with the OSD; OK pauses; Back returns to detail', {}, async page => {
+  flow('website player: preferred quality "best" auto-selects 4K; Right seeks +10 s with the OSD; OK pauses; Back returns to detail', { prefs: { nativePlayer: false } }, async page => {
     await page.goto(O + '/movie/40102?play=1');
     await waitUntil(page, 'data-screen="player" (default quality "best" auto-selects within 400 ms of the sheet)', () => { const r = document.getElementById('mbptv'); return !!r && r.getAttribute('data-screen') === 'player'; }, null, 15000);
     const opened = page.mock.filter(e => /^player:\//.test(e));
@@ -622,6 +623,202 @@ async function main() {
       if (!ok) await page.waitForTimeout(150);
     }
     if (!ok) await fail(page, 'Enter on episode 2x1 should start playback (mockLog "click:episode:2x1" or "player:..."); mockLog: ' + page.mock.join(', '));
+  });
+
+  // ---- Built-in player (docs/PLAYER.md "Integration") -------------------------------------------------------------
+  // Streams come from tools/mock-extra.cjs: the AUTO HLS link fails (404), the ORG "MP4" is a silent WAV of mbp_len
+  // seconds; tv_file answers any episode; progress posts are recorded at /__mock/progress-log.
+
+  const nativeState = page => page.evaluate(() => {
+    const m = window.__mbptv, p = document.getElementById('mbptv-player'), np = m.App.nativePlayer && m.App.nativePlayer(), info = np ? np.info() : null;
+    return { mode: m.App.state().mode, screen: m.App.state().screen, player: p ? p.getAttribute('data-state') : '', info, url: location.pathname + location.search };
+  });
+  const waitNativePlaying = (page, what, timeout = 20000) => waitUntil(page, what || '#mbptv-player[data-state="playing"] with its video advancing', () => {
+    const p = document.getElementById('mbptv-player'), v = p && p.querySelector('video');
+    return !!p && p.getAttribute('data-state') === 'playing' && !!v && v.currentTime > 0.3 && !v.paused;
+  }, null, timeout);
+  const nProgress = async page => page.evaluate(() => fetch('/__mock/progress-log').then(r => r.json()));
+  const nReset = async page => page.evaluate(() => Promise.all([fetch('/__mock/progress-log?reset=1'), fetch('/__mock/player-log?reset=1')]));
+  const nCookies = async (page, map) => page.context_.addCookies(Object.keys(map).map(name => ({ name, value: String(map[name]), url: O + '/' })));
+
+  flow('built-in player: movie Play opens #mbptv-player in place, plays, posts progress to movie_progress; Back returns to detail on Play', {}, async page => {
+    await nReset(page);
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await page.evaluate(() => { window.__e2eNoReload = 1; });
+    await activate(page, '[data-key="movie:40102"]');
+    await waitScreen(page, 'detail');
+    await waitUntil(page, 'the detail heading "The Batman"', headingShows, 'The Batman', 8000);
+    await activate(page, '[data-action="play"]');
+    await waitUntil(page, '#mbptv-player (the built-in player) to open', () => !!document.getElementById('mbptv-player'), null, 4000);
+    await waitNativePlaying(page);
+    const st = await nativeState(page);
+    if (st.mode !== 'player' || st.screen !== 'player') await fail(page, 'the App should be in player mode (data-screen=player) while the built-in player is up, got ' + JSON.stringify(st));
+    if (!st.info || st.info.kind !== 'movie' || st.info.id !== '40102' || st.info.label !== 'ORG' || st.info.stream !== 'mp4') await fail(page, 'expected movie:40102 on the ORG stream (the AUTO HLS link fails first), got ' + JSON.stringify(st.info));
+    if (!(await page.evaluate(() => window.__e2eNoReload === 1)) || /play=1/.test(st.url) || page.requests.some(u => /[?&]play=1/.test(u))) await fail(page, 'the built-in player must not navigate to a ?play=1 page: ' + st.url);
+    await page.waitForTimeout(1300);
+    await back(page);
+    await waitScreen(page, 'detail', 5000);
+    const f = await waitFocus(page);
+    if (f.action !== 'play') await fail(page, 'Back from the player should focus Play on the detail screen, got ' + JSON.stringify(f));
+    const after = await nativeState(page);
+    if (after.mode !== 'shell' || after.player || after.info) await fail(page, 'the player should be gone and the App back in shell mode, got ' + JSON.stringify(after));
+    const posts = await waitUntil(page, 'a progress post for the movie', () => fetch('/__mock/progress-log').then(r => r.json()).then(l => l.filter(e => e.path === '/index/index/movie_progress').length ? l : null), null, 5000);
+    const last = posts.filter(e => e.path === '/index/index/movie_progress').pop();
+    if (last.body.type !== 'movie' || last.body.mid !== '40102' || !(+last.body.seconds >= 1) || !/^[01]$/.test(last.body.over) || last.xrw !== 'XMLHttpRequest' || last.method !== 'POST') {
+      await fail(page, 'progress should be the site\'s own form post {type: movie, mid, seconds, over, mp4_id}, got ' + JSON.stringify(last));
+    }
+    await page.waitForTimeout(2300);
+    const later = await nativeState(page);
+    if (later.mode !== 'shell' || later.screen !== 'detail') await fail(page, 'nothing may take over after the player closed, got ' + JSON.stringify(later));
+  });
+
+  flow('built-in player: an episode plays; Up Next loads the next one in the same player; Back focuses that episode on the detail screen', {}, async page => {
+    await nCookies(page, { mbp_len: 40 });
+    await nReset(page);
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="tv:556"]');
+    await waitScreen(page, 'detail');
+    await waitUntil(page, '[data-episode="2x1"] on the detail screen', () => !!document.querySelector('#mbptv [data-episode="2x1"]'), null, 10000);
+    await activate(page, '[data-episode="2x1"]');
+    await waitNativePlaying(page);
+    let st = await nativeState(page);
+    if (!st.info || st.info.kind !== 'tv' || st.info.season !== 2 || st.info.episode !== 1) await fail(page, 'the player should play S2E1, got ' + JSON.stringify(st.info));
+    await page.evaluate(() => window.__mbptv.App.nativePlayer().configure({ upNextCount: 2 }));
+    // Jump to the credits: Up Next shows 25 s before the end.
+    await page.evaluate(() => { const v = document.querySelector('#mbptv-player video'); v.currentTime = Math.max(0, v.duration - 18); });
+    await waitUntil(page, 'the Up Next card ([data-upnext] with #mbptv-player.is-upnext)', () => {
+      const p = document.getElementById('mbptv-player');
+      return !!p && p.classList.contains('is-upnext') && /Next episode in/.test(p.querySelector('[data-upnext]').textContent);
+    }, null, 6000);
+    await waitUntil(page, 'the countdown to play S2E2 in the same player', () => {
+      const i = window.__mbptv.App.nativePlayer().info();
+      return !!i && i.season === 2 && i.episode === 2;
+    }, null, 8000);
+    await waitNativePlaying(page, 'S2E2 playing');
+    const posts = await nProgress(page);
+    const ep1 = posts.filter(e => e.path === '/index/index/tv_progress' && e.body.episode === '1').pop();
+    if (!ep1 || ep1.body.over !== '1' || ep1.body.tid !== '556' || ep1.body.season !== '2') await fail(page, 'moving on from Up Next saves S2E1 as watched (over=1), got ' + JSON.stringify(posts.map(p => p.body)));
+    await page.waitForTimeout(600);
+    await back(page);
+    await waitScreen(page, 'detail', 5000);
+    const f = await waitFocus(page);
+    if (f.episode !== '2x2') await fail(page, 'Back should land on the episode that played last ([data-episode="2x2"]), got ' + JSON.stringify(f));
+    st = await nativeState(page);
+    if (st.mode !== 'shell' || st.player) await fail(page, 'the player should be closed, got ' + JSON.stringify(st));
+  });
+
+  flow('built-in player: with Autoplay next episode off, Up Next waits for the viewer (no countdown)', { prefs: { autoplayEpisodes: false } }, async page => {
+    await nCookies(page, { mbp_len: 40 });
+    await page.goto(O + '/tvshow/556?season=2&episode=1&play=1');
+    await waitNativePlaying(page);
+    await page.evaluate(() => window.__mbptv.App.nativePlayer().configure({ upNextCount: 2 }));
+    await page.evaluate(() => { const v = document.querySelector('#mbptv-player video'); v.currentTime = Math.max(0, v.duration - 18); });
+    await waitUntil(page, 'the Up Next card without a countdown ("Up next")', () => {
+      const p = document.getElementById('mbptv-player');
+      return !!p && p.classList.contains('is-upnext') && /Up next/.test(p.querySelector('[data-upnext]').textContent);
+    }, null, 6000);
+    await page.waitForTimeout(3000);
+    const i = await page.evaluate(() => window.__mbptv.App.nativePlayer().info());
+    if (!i || i.episode !== 1) await fail(page, 'with autoplay off the next episode must wait for the viewer, got ' + JSON.stringify(i));
+    await press(page, 'Enter', 1, 200); // Play now
+    await waitUntil(page, 'Play now to start S2E2', () => { const x = window.__mbptv.App.nativePlayer().info(); return !!x && x.episode === 2; }, null, 6000);
+  });
+
+  flow('built-in player: a show\'s Play resolves the episode the title page opens on (S2E1) and plays it', {}, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="tv:556"]');
+    await waitScreen(page, 'detail');
+    await waitUntil(page, 'the show\'s episodes', () => !!document.querySelector('#mbptv [data-episode="2x1"]'), null, 10000);
+    await activate(page, '[data-action="play"]');
+    await waitNativePlaying(page);
+    const st = await nativeState(page);
+    if (!st.info || st.info.season !== 2 || st.info.episode !== 1) await fail(page, 'a show-level Play should start S2E1 (the season the page shows, no resume label), got ' + JSON.stringify(st.info));
+    const title = await page.evaluate(() => document.querySelector('#mbptv-player .mbp-title').textContent);
+    if (/S\d+\s*E\d+/i.test(title)) await fail(page, 'the player title is the show name without an episode code, got ' + JSON.stringify(title));
+    await hold(page, 'Escape', 6, 60); // a held Back closes the player once and leaves the detail screen on top
+    await page.waitForTimeout(500);
+    const after = await nativeState(page);
+    if (after.mode !== 'shell' || after.screen !== 'detail' || await page.evaluate(() => !!document.querySelector('[data-dialog="exit"]'))) await fail(page, 'a held Back should close the player once and stay on the detail screen, got ' + JSON.stringify(after));
+  });
+
+  flow('built-in player: the Play key on a show nobody opened reads its title page first (Starting playback), then plays the page\'s next episode; Back while it reads cancels', {}, async page => {
+    await nCookies(page, { mbp_len: 60 });
+    // Hold the two shows' title pages back, so the resolve step is visible (and cancellable).
+    await page.route(u => /^\/tvshow\/(15980|29814)$/.test(new URL(u).pathname), async r => { await new Promise(ok => setTimeout(ok, 1200)); try { await r.continue(); } catch (e) { /* page closed */ } });
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await navigateTo(page, '[data-key="tv:15980"]');
+    await press(page, 'MediaPlayPause', 1, 200);
+    const overlay = await page.evaluate(() => document.getElementById('mbptv').getAttribute('data-overlay'));
+    if (overlay !== 'starting') await fail(page, 'while the title page is read, the "Starting playback" overlay shows, got data-overlay=' + overlay);
+    await waitNativePlaying(page);
+    const st = await nativeState(page);
+    if (!st.info || st.info.id !== '15980' || st.info.season !== 2 || st.info.episode !== 1) await fail(page, 'the show should start its page\'s next episode (S2E1: season 1 is watched), got ' + JSON.stringify(st.info));
+    await back(page);
+    await waitScreen(page, 'home', 5000);
+    const f = await waitFocus(page);
+    if (f.key !== 'tv:15980') await fail(page, 'Back from the player returns to the card, got ' + JSON.stringify(f));
+    await navigateTo(page, '[data-key="tv:29814"]');
+    await press(page, 'MediaPlayPause', 1, 150);
+    await back(page);
+    await page.waitForTimeout(2500);
+    const after = await nativeState(page);
+    const overlay2 = await page.evaluate(() => document.getElementById('mbptv').getAttribute('data-overlay'));
+    if (after.player || after.mode !== 'shell' || after.screen !== 'home' || overlay2) await fail(page, 'Back while the title page is read cancels: no player, Home stays, got ' + JSON.stringify({ after, overlay2 }));
+  });
+
+  flow('built-in player: a ?play=1 page plays in the built-in player, drops play=1, and keeps the website\'s own auto-play quiet', {}, async page => {
+    await nCookies(page, { mbp_len: 60 });
+    await page.goto(O + '/tvshow/556?season=2&episode=1&play=1');
+    await waitNativePlaying(page);
+    const st = await nativeState(page);
+    if (/play=1/.test(st.url)) await fail(page, 'the page should drop play=1 from its URL once the built-in player took over, at ' + st.url);
+    if (!st.info || st.info.season !== 2 || st.info.episode !== 1) await fail(page, 'the ?play=1 page should play S2E1, got ' + JSON.stringify(st.info));
+    await page.waitForTimeout(1200); // the mock site's own auto-play clicks the episode 300 ms after load
+    const site = await page.evaluate(() => {
+      const vids = Array.prototype.filter.call(document.querySelectorAll('video'), v => !document.getElementById('mbptv').contains(v) && !v.paused);
+      const side = document.querySelector('.sidebarbg2');
+      return { playing: vids.length, picker: !!side && getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0 };
+    });
+    if (site.playing || site.picker) await fail(page, 'the website\'s own auto-play must stay quiet behind the built-in player, got ' + JSON.stringify(site) + '; mockLog ' + page.mock.join(', '));
+    await back(page);
+    await waitScreen(page, 'detail', 5000);
+    await page.waitForTimeout(2500);
+    const after = await nativeState(page);
+    if (after.mode !== 'shell' || after.screen !== 'detail') await fail(page, 'after Back the detail screen stays (the website\'s player never takes over), got ' + JSON.stringify(after));
+  });
+
+  flow('built-in player off (Prefs nativePlayer: false): Play takes the website path (?play=1 page, the website\'s player)', { prefs: { nativePlayer: false } }, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="movie:40102"]');
+    await waitScreen(page, 'detail');
+    await activate(page, '[data-action="play"]');
+    await page.waitForURL(/\/movie\/40102\?play=1/, { timeout: 8000 });
+    await waitUntil(page, 'the website\'s player (player mode)', () => window.__mbptv && window.__mbptv.App.state().mode === 'player', null, 15000);
+    if (!page.mock.some(e => /^player:\/index\/index\/player\?mfid=/.test(e))) await fail(page, 'the website\'s player should have opened, mockLog: ' + page.mock.join(', '));
+    if (await page.evaluate(() => !!document.getElementById('mbptv-player'))) await fail(page, 'the built-in player must stay closed when it is switched off');
+  });
+
+  flow('built-in player failure: the error card\'s "Try website player" plays through the website instead', {}, async page => {
+    await nCookies(page, { mbp_all: 'bad' });
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="movie:40102"]');
+    await waitScreen(page, 'detail');
+    await activate(page, '[data-action="play"]');
+    await waitUntil(page, 'the error card with "Try website player" focused', () => {
+      const card = document.querySelector('#mbptv-player [data-dialog="player-error"]'), f = card && card.querySelector('.is-focused');
+      return !!card && card.getBoundingClientRect().width > 0 && !!f && f.getAttribute('data-action') === 'website';
+    }, null, 20000);
+    await press(page, 'Enter', 1, 200);
+    await page.waitForURL(/\/movie\/40102\?play=1/, { timeout: 8000 });
+    await waitUntil(page, 'the website\'s player (player mode) on the ?play=1 page', () => window.__mbptv && window.__mbptv.App.state().mode === 'player', null, 15000);
+    if (!page.mock.some(e => /^player:\/index\/index\/player\?mfid=/.test(e))) await fail(page, 'the website\'s player should have opened, mockLog: ' + page.mock.join(', '));
+    if (await page.evaluate(() => !!document.getElementById('mbptv-player'))) await fail(page, 'the fallback page must use the website\'s player, not the built-in one again');
   });
 
   // ---- Browse, settings, sign-in, failures -----------------------------------------------------------------------
@@ -677,6 +874,451 @@ async function main() {
     await page.unroute(listUrl);
     await activate(page, '[data-action="retry"]');
     await waitUntil(page, 'cards in [data-zone="grid"] after Retry', () => document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]').length > 0, null, 10000);
+  });
+
+  // ---- Remote flows and layout checks added with the 0.3 review fixes ----------------------------------------------
+
+  const appState = page => page.evaluate(() => window.__mbptv.App.state());
+  // Holds a key: one keydown, then auto-repeat keydowns (KeyboardEvent.repeat), then the keyup.
+  async function hold(page, key, repeats = 8, gap = 60) {
+    await page.keyboard.down(key);
+    for (let i = 0; i < repeats; i++) { await page.waitForTimeout(gap); await page.keyboard.down(key); }
+    await page.keyboard.up(key);
+  }
+  // Some TVs report auto-repeat as keyup/keydown pairs a few milliseconds apart.
+  async function pairRepeat(page, code, key, times = 8) {
+    const cdp = await page.context().newCDPSession(page);
+    for (let i = 0; i < times; i++) {
+      await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, key, code: '' });
+      await new Promise(r => setTimeout(r, 30));
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, key, code: '' });
+    }
+  }
+  async function submitBat(page) {
+    await openSearch(page);
+    await page.keyboard.type('bat', { delay: 40 });
+    await activate(page, '[data-action="search-submit"]');
+    await waitUntil(page, 'result cards in [data-zone="grid"]', () => document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]').length > 0, null, 8000);
+    return waitFocus(page);
+  }
+
+  flow('holding OK on a card opens its detail once and never starts playback; a held Back pops one screen', {}, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await navigateTo(page, '[data-key="movie:81314"]');
+    await page.evaluate(() => { window.__e2eNoReload = 1; });
+    await hold(page, 'Enter', 10, 60);
+    await page.waitForTimeout(1500);
+    const a = await page.evaluate(() => ({ same: window.__e2eNoReload === 1, url: location.pathname + location.search }));
+    const st = await appState(page);
+    if (!a.same || /play=1/.test(a.url)) await fail(page, 'a held OK must not start playback (page ' + a.url + ')');
+    if (st.stack.join(',') !== 'home,detail' || st.screen !== 'detail') await fail(page, 'a held OK should open exactly one detail screen, got ' + JSON.stringify(st));
+    // TVs that repeat as keyup/keydown pairs: still one activation. On Quality, one press opens the sheet; a second
+    // would choose the focused option (a toast) and close it.
+    await navigateTo(page, '[data-action="quality"]');
+    await pairRepeat(page, 13, 'Enter', 8);
+    await page.waitForTimeout(1000);
+    const b = await page.evaluate(() => ({ layer: document.getElementById('mbptv').getAttribute('data-layer'), toast: (document.getElementById('mbptv-toast') || {}).textContent || '' }));
+    if (b.layer !== 'sheet' || /Preferred quality/.test(b.toast)) await fail(page, 'fast keyup/keydown pairs (a TV auto-repeat) must count as one press: ' + JSON.stringify(b));
+    await back(page);
+    // Two screens deep, a held Back pops exactly one.
+    await navigateTo(page, '#mbptv [data-zone="row:related"] [data-key]');
+    await press(page, 'Enter', 1, 300);
+    await waitUntil(page, 'a second detail screen', () => window.__mbptv.App.state().stack.join(',') === 'home,detail,detail', null, 5000);
+    await page.waitForTimeout(300);
+    await hold(page, 'Escape', 10, 60);
+    await page.waitForTimeout(800);
+    const c = await appState(page);
+    if (c.stack.join(',') !== 'home,detail' || c.layer) await fail(page, 'a held Back should pop exactly one screen, got ' + JSON.stringify(c));
+  });
+
+  flow('holding OK on the Search key searches once; holding OK on a letter keeps typing it', {}, async page => {
+    await openSearch(page);
+    await page.keyboard.type('bat', { delay: 40 });
+    await navigateTo(page, '[data-action="search-submit"]');
+    await hold(page, 'Enter', 14, 60);
+    await waitUntil(page, 'result cards', () => document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]').length > 0, null, 8000);
+    await page.waitForTimeout(1200);
+    const st = await appState(page);
+    if (st.screen !== 'search' || st.stack.join(',') !== 'home,search') await fail(page, 'a held OK on Search should only search, got ' + JSON.stringify(st));
+    await back(page);
+    await activate(page, '[data-action="clear"]');
+    await navigateTo(page, '[data-char="a"]');
+    await hold(page, 'Enter', 4, 80);
+    const q = await queryText(page);
+    if (!/^a{2,}$/.test(q)) await fail(page, 'holding OK on a letter key should repeat it, got ' + JSON.stringify(q));
+  });
+
+  flow('search: Right from the keyboard\'s bottom keys returns to the results and never lands on another key', {}, async page => {
+    await submitBat(page);
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    const k = await focusInfo(page);
+    if (k.zone !== 'keyboard') await fail(page, 'Left from the first result column should reach the keyboard, got ' + JSON.stringify(k));
+    await press(page, 'ArrowRight');
+    const g = await focusInfo(page);
+    if (g.zone !== 'grid') await fail(page, 'Right from the keyboard (' + (k.action || k.char) + ') should return to the results, got ' + JSON.stringify(g));
+    if ((await queryText(page)) !== 'bat') await fail(page, 'the query must be kept');
+    await navigateTo(page, '[data-action="clear"]');
+    await press(page, 'ArrowRight');
+    const r = await focusInfo(page);
+    if (r.zone === 'keyboard') await fail(page, 'Right from Clear must leave the keyboard, got ' + JSON.stringify(r));
+  });
+
+  flow('search: Back from the results returns to the keyboard with the query and results kept; a second Back goes Home', {}, async page => {
+    await submitBat(page);
+    await press(page, 'ArrowDown');
+    await back(page);
+    const f = await waitFocus(page);
+    const st = await appState(page);
+    if (st.screen !== 'search' || f.zone !== 'keyboard') await fail(page, 'Back from the results should focus the keyboard on the search screen, got ' + JSON.stringify({ st, f }));
+    if ((await queryText(page)) !== 'bat') await fail(page, 'the query must stay "bat"');
+    if (!(await cardKeys(page, '[data-zone="grid"]')).length) await fail(page, 'the results must stay on screen');
+    await back(page);
+    await waitScreen(page, 'home');
+  });
+
+  flow('search: slow results never take focus from a key typed meanwhile', {}, async page => {
+    await page.route(/\/index\/search\?/, r => setTimeout(() => r.continue().catch(() => {}), 2500));
+    await openSearch(page);
+    await page.keyboard.type('bat', { delay: 40 });
+    await activate(page, '[data-action="search-submit"]');
+    await press(page, 'ArrowUp', 2, 120);
+    const typed = await focusInfo(page);
+    await press(page, 'Enter', 1, 150);
+    await page.waitForTimeout(3200);
+    const f = await focusInfo(page);
+    if (!typed.char || f.char !== typed.char) await fail(page, 'focus should stay on the key typed while the results loaded (' + typed.char + '), got ' + JSON.stringify(f));
+    if ((await queryText(page)) !== 'bat' + typed.char) await fail(page, 'the typed key should be in the query, got ' + JSON.stringify(await queryText(page)));
+  });
+
+  flow('search: the trending list arriving late keeps focus on the recent chip the viewer is on', {}, async page => {
+    await page.context_.addInitScript({ content: 'try { localStorage.setItem("mbptv:recent:v1", JSON.stringify(["dune"])); } catch (e) {}' });
+    await page.route(/\/index\/api\/search_hot/, r => setTimeout(() => r.continue().catch(() => {}), 2500));
+    await page.reload();
+    await openSearch(page);
+    await navigateTo(page, '[data-query="dune"]');
+    await waitUntil(page, 'the trending chips', () => !!document.querySelector('#mbptv [data-query="Resident Evil"]'), null, 6000);
+    await page.waitForTimeout(300);
+    const f = await waitFocus(page);
+    if (f.query !== 'dune') await fail(page, 'focus should stay on the "dune" chip after the lists were rebuilt, got ' + JSON.stringify(f));
+  });
+
+  flow('tabs and chips remember the selection: Up from the results lands on the selected tab; a chosen chip keeps focus', {}, async page => {
+    await submitBat(page);
+    await press(page, 'ArrowRight', 3);
+    await press(page, 'ArrowUp');
+    const t = await focusInfo(page);
+    if (t.type !== 'all') await fail(page, 'Up from the results should land on the selected "All" tab, got ' + JSON.stringify(t));
+    await activate(page, '[data-action="nav-movies"]');
+    await waitScreen(page, 'browse');
+    await waitUntil(page, 'grid cards', () => document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]').length > 0, null, 8000);
+    await navigateTo(page, { selector: '#mbptv .mb-browse-tabs [data-f]', index: 2 });
+    const chip = await focusInfo(page);
+    await press(page, 'Enter', 1, 200);
+    await page.waitForTimeout(1200);
+    const c = await focusInfo(page);
+    if (c.text !== chip.text) await fail(page, 'the chosen chip should keep focus while its list loads, got ' + JSON.stringify(c));
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowUp');
+    const u = await focusInfo(page);
+    if (u.text !== chip.text) await fail(page, 'Up from the grid should return to the selected chip "' + chip.text + '", got ' + JSON.stringify(u));
+  });
+
+  flow('the rail reopens on the current section, not on the last item browsed', {}, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    let f = null;
+    for (let i = 0; i < 12; i++) { await press(page, 'ArrowLeft'); f = await focusInfo(page); if (/^nav-/.test(f.action)) break; }
+    await press(page, 'ArrowDown', 4);
+    await press(page, 'ArrowRight');
+    await press(page, 'ArrowLeft');
+    const r = await focusInfo(page);
+    if (r.action !== 'nav-home') await fail(page, 'the rail should reopen on Home, got ' + JSON.stringify(r));
+  });
+
+  flow('Up and Down step through Home rows in order; Back from a lower row returns to the first row', {}, async page => {
+    await waitScreen(page, 'home');
+    const f0 = await waitFocus(page);
+    const zones = await page.evaluate(() => Array.prototype.map.call(document.querySelectorAll('#mbptv [data-zone^="row:"]'), z => z.getAttribute('data-zone')));
+    const seen = [f0.zone];
+    for (let i = 1; i < Math.min(4, zones.length); i++) { await press(page, 'ArrowDown', 1, 250); seen.push((await focusInfo(page)).zone); }
+    if (seen.join(',') !== zones.slice(0, seen.length).join(',')) await fail(page, 'Down should visit the rows in order: ' + seen.join(',') + ' vs ' + zones.join(','));
+    await press(page, 'ArrowUp', 1, 250);
+    const up = await focusInfo(page);
+    if (up.zone !== zones[seen.length - 2]) await fail(page, 'Up should return to the row above (' + zones[seen.length - 2] + '), got ' + up.zone);
+    await back(page);
+    const b = await focusInfo(page);
+    if (b.zone !== zones[0]) await fail(page, 'Back from a lower row should return to the first row, got ' + b.zone);
+    const layer = await page.evaluate(() => document.getElementById('mbptv').getAttribute('data-layer'));
+    if (layer) await fail(page, 'no exit dialog yet');
+  });
+
+  flow('a show with 50 seasons: one line of pills, Down lands on the selected season, Left scrolls it into view', {}, async page => {
+    await page.route(/\/tvshow\/556(\?.*)?$/, async r => {
+      const res = await r.fetch();
+      let body = await res.text();
+      const pills = [];
+      for (let n = 1; n <= 50; n++) pills.push('<a href="/tvshow/556?season=' + n + '"><p class="' + (n === 37 ? 'active' : '') + '">' + n + '</p></a>');
+      body = body.replace(/(<p class="name2">SEASON<\/p>\s*<div>)[\s\S]*?(<\/div>)/, '$1' + pills.join(' ') + '$2');
+      r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body });
+    });
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="tv:556"]');
+    await waitScreen(page, 'detail');
+    await waitUntil(page, '50 season pills', () => document.querySelectorAll('#mbptv [data-season]').length === 50, null, 8000);
+    const lines = await page.evaluate(() => new Set(Array.prototype.map.call(document.querySelectorAll('#mbptv [data-season]'), p => p.offsetTop)).size);
+    if (lines !== 1) await fail(page, 'the season pills should be one line, got ' + lines + ' lines');
+    await press(page, 'ArrowDown', 1, 400);
+    const s = await focusInfo(page);
+    if (s.season !== '37') await fail(page, 'Down from the buttons should land on the selected Season 37, got ' + JSON.stringify(s));
+    const onScreen = () => { const r = document.querySelector('#mbptv .is-focused').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; };
+    if (!(await page.evaluate(onScreen))) await fail(page, 'the selected season pill should be on screen');
+    await press(page, 'ArrowLeft', 10, 120);
+    await page.waitForTimeout(400);
+    const l = await focusInfo(page);
+    if (l.season !== '27' || !(await page.evaluate(onScreen))) await fail(page, 'Left x10 should reach Season 27, on screen; got ' + JSON.stringify(l));
+    await press(page, 'ArrowDown', 1, 300);
+    if (!(await focusInfo(page)).episode) await fail(page, 'Down from the pills should reach the episodes');
+  });
+
+  flow('switching season: Down lands on the first episode; a failed season offers Try again, which reloads it', {}, async page => {
+    let failures = 2; // the request and the one retry Api makes
+    await page.route(/\/tvshow\/556\?season=5$/, r => { if (failures > 0) { failures--; r.abort('failed'); } else r.continue(); });
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="tv:556"]');
+    await waitScreen(page, 'detail');
+    await waitUntil(page, 'episodes', () => document.querySelectorAll('#mbptv [data-episode]').length > 0, null, 8000);
+    await activate(page, '[data-season="3"]');
+    await waitUntil(page, 'season 3 episodes', () => document.querySelectorAll('#mbptv [data-episode]').length > 0 && !document.querySelector('#mbptv [data-zone="row:episodes"] .mb-skel'), null, 8000);
+    await press(page, 'ArrowDown', 1, 300);
+    const e = await focusInfo(page);
+    const firstEp = await page.evaluate(() => document.querySelector('#mbptv [data-episode]').getAttribute('data-episode'));
+    if (e.episode !== firstEp) await fail(page, 'Down after switching season should land on the first episode (' + firstEp + '), got ' + JSON.stringify(e));
+    await press(page, 'ArrowUp', 1, 300);
+    await activate(page, '[data-season="5"]');
+    await waitUntil(page, 'the season error with Try again', () => !!document.querySelector('#mbptv [data-action="season-retry"]'), null, 20000);
+    await press(page, 'ArrowDown', 1, 300);
+    const t = await focusInfo(page);
+    if (t.action !== 'season-retry') await fail(page, 'Down from the pills should reach Try again, got ' + JSON.stringify(t));
+    await press(page, 'Enter', 1, 300);
+    await waitUntil(page, 'season 5 episodes after Try again', () => document.querySelectorAll('#mbptv [data-episode]').length > 0, null, 8000);
+  });
+
+  flow('detail rows start right under the header (no empty band) for a show and for a movie', {}, async page => {
+    const gap = () => {
+      const mini = document.querySelector('#mbptv .mb-screen.is-current .mb-detail-mini').getBoundingClientRect();
+      const rows = Array.prototype.filter.call(document.querySelectorAll('#mbptv .mb-screen.is-current .mb-detail-rows > .mb-row'), r => !r.classList.contains('is-past'));
+      const first = rows[0].getBoundingClientRect();
+      const em = parseFloat(getComputedStyle(document.getElementById('mbptv')).fontSize);
+      return { gapEm: (first.top - mini.bottom) / em, headerOpaque: +getComputedStyle(document.querySelector('#mbptv .mb-screen.is-current .mb-detail-mini')).opacity };
+    };
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-key="tv:556"]');
+    await waitScreen(page, 'detail');
+    await navigateTo(page, '[data-episode="2x1"]');
+    await page.waitForTimeout(600);
+    const tv = await page.evaluate(gap);
+    if (!(tv.gapEm >= 0.5 && tv.gapEm <= 3.5) || tv.headerOpaque < 0.9) await fail(page, 'show: the rows should start just under the header, got ' + JSON.stringify(tv));
+    const body = await page.evaluate(() => document.querySelector('#mbptv .mb-screen.is-current .mb-mini-body').textContent);
+    if (!/Penguin|Catwoman/.test(body)) await fail(page, 'the header should show the focused episode\'s overview, got ' + JSON.stringify(body));
+    await back(page);
+    await waitScreen(page, 'home');
+    await activate(page, '[data-key="movie:40102"]');
+    await waitScreen(page, 'detail');
+    await waitUntil(page, 'the related row', () => !!document.querySelector('#mbptv .mb-screen.is-current [data-zone="row:related"] [data-key]'), null, 8000);
+    await navigateTo(page, '#mbptv .mb-screen.is-current [data-zone="row:related"] [data-key]');
+    await page.waitForTimeout(600);
+    const mv = await page.evaluate(gap);
+    if (!(mv.gapEm >= 0.5 && mv.gapEm <= 3.5)) await fail(page, 'movie: the rows should start just under the header, got ' + JSON.stringify(mv));
+    const tags = await page.evaluate(() => Array.prototype.map.call(document.querySelectorAll('#mbptv .mb-screen.is-current .mb-detail-info .mb-tags .mb-tag'), t => t.textContent));
+    if (tags.indexOf('4K') >= 0 || tags.indexOf('4K HDR') < 0) await fail(page, 'badges should not repeat 4K next to 4K HDR, got ' + tags.join(', '));
+  });
+
+  flow('search grid navigates by column: Right stops at the row end, Down from the last column reaches a shorter last row', {}, async page => {
+    // One page of results only (6 titles: a full row of 5 and a row of 1), so paging never changes the grid mid-test.
+    await page.route(/\/index\/search\?.*page=\d/, r => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>x - MovieBoxPro</title><body><div class="search_info"></div></body>' }));
+    await submitBat(page);
+    const count = await page.evaluate(() => document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]').length);
+    const cols = await page.evaluate(() => { const c = document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]'); let n = 0; while (n < c.length && c[n].offsetTop === c[0].offsetTop) n++; return n; });
+    await press(page, 'ArrowRight', cols + 1, 110);
+    const r = await focusInfo(page);
+    const idx = await page.evaluate(() => Array.prototype.indexOf.call(document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]'), document.querySelector('#mbptv .is-focused')));
+    if (idx !== cols - 1) await fail(page, 'Right should stop at the end of the first row (index ' + (cols - 1) + '), got ' + idx + ' ' + JSON.stringify(r));
+    await press(page, 'ArrowDown', 1, 150);
+    const idx2 = await page.evaluate(() => Array.prototype.indexOf.call(document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]'), document.querySelector('#mbptv .is-focused')));
+    const want = Math.min(count - 1, 2 * cols - 1);
+    if (idx2 !== want) await fail(page, 'Down from the last column should reach index ' + want + ', got ' + idx2);
+    await press(page, 'ArrowUp', 1, 150);
+    const idx3 = await page.evaluate(() => Array.prototype.indexOf.call(document.querySelectorAll('#mbptv [data-zone="grid"] [data-key]'), document.querySelector('#mbptv .is-focused')));
+    if (idx3 !== want - cols) await fail(page, 'Up should go back one row (index ' + (want - cols) + '), got ' + idx3);
+  });
+
+  flow('the page behind the shell never scrolls (no scrollbar); website view unlocks it and the TV app locks it again', {}, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    const locked = () => ({ cls: document.documentElement.classList.contains('mbptv-lock'), html: getComputedStyle(document.documentElement).overflow, body: getComputedStyle(document.body).overflow });
+    const a = await page.evaluate(locked);
+    if (!a.cls || a.html !== 'hidden' || a.body !== 'hidden') await fail(page, 'the shell should lock page scrolling, got ' + JSON.stringify(a));
+    await activate(page, '[data-action="nav-settings"]');
+    await waitScreen(page, 'settings');
+    await activate(page, '[data-action="setting-website"]');
+    await waitScreen(page, 'native');
+    const b = await page.evaluate(() => { const r = { cls: document.documentElement.classList.contains('mbptv-lock'), html: getComputedStyle(document.documentElement).overflow }; window.scrollTo(0, 300); r.y = window.scrollY; return r; });
+    if (b.cls || b.html === 'hidden' || b.y < 100) await fail(page, 'website view must leave the page scrollable, got ' + JSON.stringify(b));
+    const pill = await page.evaluate(() => document.getElementById('mbptv-pill').textContent.trim());
+    if (!/Back to TV app/.test(pill)) await fail(page, 'the pill should say "Back to TV app", got ' + JSON.stringify(pill));
+    await page.evaluate(() => document.getElementById('mbptv-pill').click());
+    await waitScreen(page, 'settings');
+    if (!(await page.evaluate(() => document.documentElement.classList.contains('mbptv-lock')))) await fail(page, 'returning to the TV app should lock scrolling again');
+  });
+
+  flow('player mode hides the website player\'s own controls (captions stay); Back restores them', { prefs: { nativePlayer: false } }, async page => {
+    await page.goto(O + '/movie/40102?play=1');
+    await waitUntil(page, 'player mode', () => window.__mbptv.App.state().mode === 'player', null, 15000);
+    await page.evaluate(() => {
+      const dlg = document.getElementById('my_dialog');
+      const jw = document.createElement('div');
+      jw.className = 'jwplayer jw-state-playing';
+      jw.innerHTML = '<div class="jw-wrapper"><div class="jw-captions">Caption line</div><div class="jw-controls"><div class="jw-display">display</div><div class="jw-controlbar">bar</div></div><div class="jw-title">Title</div></div>';
+      dlg.appendChild(jw);
+    });
+    const shown = () => ({ bar: getComputedStyle(document.querySelector('.jw-controlbar')).display, display: getComputedStyle(document.querySelector('.jw-display')).display, captions: getComputedStyle(document.querySelector('.jw-captions')).display, html: document.documentElement.className });
+    const a = await page.evaluate(shown);
+    if (a.bar !== 'none' || a.display !== 'none' || a.captions === 'none' || !/mbptv-player/.test(a.html)) await fail(page, 'in player mode JW controls must be hidden and captions shown, got ' + JSON.stringify(a));
+    await page.evaluate(() => { document.querySelector('.jwplayer').className = 'jwplayer jw-state-buffering'; });
+    if ((await page.evaluate(shown)).display === 'none') await fail(page, 'JW Player\'s buffering display must stay visible');
+    await back(page);
+    await waitScreen(page, 'detail', 12000);
+    const b = await page.evaluate(() => ({ bar: getComputedStyle(document.querySelector('.jw-controlbar')).display, html: document.documentElement.className }));
+    if (b.bar === 'none' || /mbptv-player/.test(b.html)) await fail(page, 'after the player closes the page must be untouched again, got ' + JSON.stringify(b));
+  });
+
+  flow('website player: the OSD names the episode and stays up while paused', { prefs: { nativePlayer: false } }, async page => {
+    await page.goto(O + '/tvshow/556?season=2&episode=1&play=1');
+    await waitUntil(page, 'player mode', () => window.__mbptv.App.state().mode === 'player', null, 15000);
+    const osd = await waitUntil(page, 'the OSD episode line', () => { const s = document.querySelector('#mbptv-osd .mbo-sub'); return s && s.textContent ? { title: document.querySelector('#mbptv-osd .mbo-title').textContent, sub: s.textContent } : null; }, null, 4000);
+    if (!/^S2 . E1\b/.test(osd.sub) || /S2E1|S\d+E\d+/.test(osd.title)) await fail(page, 'the OSD should read the show title with an "S2 · E1 ..." line, got ' + JSON.stringify(osd));
+    await press(page, 'Enter', 1, 300);
+    await waitUntil(page, 'the video paused', () => document.querySelector('#my_dialog video').paused, null, 3000);
+    await page.waitForTimeout(4500);
+    const vis = await page.evaluate(() => document.getElementById('mbptv-osd').classList.contains('is-visible'));
+    if (!vis) await fail(page, 'the OSD must stay visible while the video is paused');
+    await press(page, 'Enter', 1, 300);
+    await waitUntil(page, 'the OSD to hide again once playing', () => !document.getElementById('mbptv-osd').classList.contains('is-visible'), null, 6000);
+  });
+
+  flow('website player: a stalled video shows a buffering spinner in the OSD until it plays again', { prefs: { nativePlayer: false } }, async page => {
+    await page.route(/\/__e2e\/stall\.wav$/, () => { /* never answers */ });
+    await page.goto(O + '/movie/40102?play=1');
+    await waitUntil(page, 'player mode', () => window.__mbptv.App.state().mode === 'player', null, 15000);
+    await waitUntil(page, 'the OSD to hide while playing', () => !document.getElementById('mbptv-osd').classList.contains('is-visible'), null, 8000);
+    await page.evaluate(() => { const v = document.querySelector('#my_dialog video'); window.__e2eSrc = v.src; v.src = '/__e2e/stall.wav'; v.play().catch(() => {}); });
+    await waitUntil(page, 'the OSD with a buffering spinner', () => {
+      const o = document.getElementById('mbptv-osd');
+      return o.classList.contains('is-visible') && !!o.querySelector('.mbo-state .mbo-spin');
+    }, null, 5000);
+    await page.evaluate(() => { const v = document.querySelector('#my_dialog video'); v.src = window.__e2eSrc; v.play().catch(() => {}); });
+    await waitUntil(page, 'the spinner to go and the OSD to hide once playing again', () => {
+      const o = document.getElementById('mbptv-osd');
+      return !o.querySelector('.mbo-state .mbo-spin') && !o.classList.contains('is-visible');
+    }, null, 8000);
+  });
+
+  flow('website player: a preferred file is chosen without flashing the file list; Up during the choice opens the full list', { prefs: { nativePlayer: false } }, async page => {
+    await page.context_.addInitScript({ content: `(function () {
+      if (window.top !== window.self) return;
+      var seen = window.__e2eSheet = [];
+      var t = setInterval(function () {
+        var s = document.querySelector('#mbptv [data-sheet="sources"]'), r = document.getElementById('mbptv');
+        seen.push((s ? 'sheet' : '-') + '/' + (r ? r.getAttribute('data-overlay') || '' : ''));
+        if (seen.length > 800) clearInterval(t);
+      }, 25);
+    }());` });
+    await page.goto(O + '/movie/40102?play=1');
+    await waitUntil(page, 'player mode', () => window.__mbptv.App.state().mode === 'player', null, 15000);
+    const seen = await page.evaluate(() => window.__e2eSheet.slice());
+    if (seen.some(s => /^sheet/.test(s))) await fail(page, 'the file list must not flash on screen: ' + Array.from(new Set(seen)).join(' > '));
+    await page.goto(O + '/movie/40102?play=1');
+    await waitUntil(page, 'the starting overlay naming the file', () => { const r = document.getElementById('mbptv'); return !!r && r.getAttribute('data-overlay') === 'starting' && /Press Up/.test(r.textContent); }, null, 8000);
+    await press(page, 'ArrowUp', 1, 300);
+    await waitUntil(page, 'the full list of files after Up', () => document.querySelectorAll('#mbptv [data-sheet="sources"] [data-source-index]').length === 2, null, 4000);
+    const label = await page.evaluate(() => document.querySelector('#mbptv [data-sheet="sources"] [data-source-index="0"] .mb-source-file').textContent);
+    if (!/WEBRip\s+.\s+DDP5\.1\s+.\s+x264/.test(label)) await fail(page, 'the file row should show a readable label (source, audio, codec), got ' + JSON.stringify(label));
+    await page.waitForTimeout(1500);
+    if ((await appState(page)).mode === 'player') await fail(page, 'after Up the viewer chooses; nothing plays on its own');
+  });
+
+  flow('a Featured banner without a title shows placeholders, then learns its title from its page', {}, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await navigateTo(page, '#mbptv [data-zone="row:featured"] [data-key]');
+    const key = (await focusInfo(page)).key;
+    await waitUntil(page, 'the banner title on the hero and on the card', k => {
+      const card = document.querySelector('#mbptv [data-zone="row:featured"] [data-key="' + k + '"] .mb-card-label');
+      const t = document.querySelector('#mbptv .mb-hero-info .mb-display');
+      return card && card.textContent && t && t.textContent === card.textContent;
+    }, key, 8000);
+    const btns = await page.evaluate(() => getComputedStyle(document.querySelector('#mbptv .mb-hero-info .mb-btns')).visibility);
+    if (btns !== 'hidden') await fail(page, 'in the rows the hero buttons step aside');
+  });
+
+  flow('Settings clears the search history on this TV, and signing out forgets it too', { allowErrors: /signed-out|sign-?in|gate|login/i }, async page => {
+    await submitBat(page);
+    const before = await page.evaluate(() => JSON.parse(localStorage.getItem('mbptv:recent:v1') || '[]'));
+    if (before[0] !== 'bat') await fail(page, 'the search should be remembered first, got ' + JSON.stringify(before));
+    await activate(page, '[data-action="nav-settings"]');
+    await waitScreen(page, 'settings');
+    await activate(page, '[data-action="setting-clearSearches"]');
+    const after = await page.evaluate(() => JSON.parse(localStorage.getItem('mbptv:recent:v1') || '[]'));
+    if (after.length) await fail(page, 'Clear search history should empty the list, got ' + JSON.stringify(after));
+    await activate(page, '[data-action="nav-search"]');
+    await waitScreen(page, 'search');
+    await page.keyboard.type('zzq', { delay: 40 });
+    await activate(page, '[data-action="search-submit"]');
+    await waitUntil(page, 'the empty state', () => !!document.querySelector('#mbptv [data-action="open-website"]'), null, 8000);
+    await page.context().addCookies([{ name: 'mockgate', value: '1', url: O + '/' }]);
+    await activate(page, '[data-action="nav-movies"]');
+    await waitScreen(page, 'signin', 12000);
+    const gone = await page.evaluate(() => [JSON.parse(localStorage.getItem('mbptv:recent:v1') || '[]').length, sessionStorage.getItem('mbptv:session:v1')]);
+    if (gone[0] || gone[1]) await fail(page, 'signing out should forget recent searches and the saved place, got ' + JSON.stringify(gone));
+  });
+
+  flow('Diagnostics reads at TV size, runs its self-test on demand, and Left from any log line returns to its buttons', {}, async page => {
+    await waitScreen(page, 'home');
+    await waitFocus(page);
+    await activate(page, '[data-action="nav-settings"]');
+    await waitScreen(page, 'settings');
+    await activate(page, '[data-action="setting-diagnostics"]');
+    await waitScreen(page, 'diagnostics');
+    const facts = await page.evaluate(() => ({
+      selfTest: Array.prototype.map.call(document.querySelectorAll('#mbptv .mb-fact'), f => f.textContent).filter(t => /^Self-test/.test(t))[0] || '',
+      line: parseFloat(getComputedStyle(document.querySelector('#mbptv .mb-logline')).fontSize),
+      value: parseFloat(getComputedStyle(document.querySelector('#mbptv .mb-fact-v')).fontSize)
+    }));
+    if (/Not run yet/.test(facts.selfTest)) await fail(page, 'Diagnostics should run the live self-test when it opens, got ' + JSON.stringify(facts.selfTest));
+    if (facts.line < 21 || facts.value < 23) await fail(page, 'log lines and facts must be readable from 3 m (at least 22 and 24 px at 1080p), got ' + JSON.stringify(facts));
+    await navigateTo(page, { selector: '#mbptv .mb-logline', index: 0 });
+    await press(page, 'ArrowLeft');
+    const f = await focusInfo(page);
+    if (f.action !== 'selftest' && f.action !== 'clear-log') await fail(page, 'Left from the top log line should return to the Diagnostics buttons, got ' + JSON.stringify(f));
+  });
+
+  flow('Home on an error screen that replaced Home tries Home again', { allowErrors: /network|http|fail|abort|home/i }, async page => {
+    const homeXhr = u => new URL(u).pathname === '/';
+    await page.route(homeXhr, r => r.request().isNavigationRequest() ? r.continue() : r.abort('failed'));
+    await page.goto(O + '/movie/40102');
+    await waitScreen(page, 'detail');
+    await waitFocus(page);
+    await back(page);
+    await waitScreen(page, 'error', 20000);
+    await page.unroute(homeXhr);
+    await activate(page, '[data-action="home"]');
+    await waitScreen(page, 'home', 10000);
+    await waitUntil(page, 'home rows', () => document.querySelectorAll('#mbptv [data-zone^="row:"] [data-key]').length > 0, null, 8000);
   });
 
   await run();

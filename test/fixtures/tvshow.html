@@ -1,8 +1,12 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>The Batman - MovieBoxPro</title></head>
 <!-- Sanitized structural copy of /tvshow/556?season=2 (2026-09-24). Account tokens replaced, scripts removed,
-     episodes trimmed to 3. On the live page, .start_app_episode clicks POST /index/index/tv_file and then
-     fill #file_list; a single source starts the player, several open .sidebarbg2. -->
+     episode cards trimmed to 3. On the live page, .start_app_episode clicks POST /index/index/tv_file and then
+     fill #file_list; a single source starts the player, several open .sidebarbg2. Artwork uses the site's real
+     thumbnail URL format (thumb_<URL-safe base64 of "path|width|quality">.png). The hidden .watch_plan_bg list
+     (modelled on the live page) names every episode of every season with its watched mark: season 1 has 14
+     entries (the S01E00 special included) with E1-E13 watched, season 2 has 13 with E2-E3 watched, season 3 has
+     E1-E2 watched. Names after S2E3 are illustrative. -->
 <body style="background: #000;">
 <div class="wrap" style="width:100%;background:#000;">
 <div class="movie">
@@ -22,7 +26,7 @@
 <p class="mask"></p>
 </div>
 <div class="info" style="width:1200px;margin:121px auto 0;position:relative;overflow:hidden;">
-<p style="width:1200px;"><img src="https://thumb.chuaxin.com/thumb_TEST_tv_556.png" class="cover"></p>
+<p style="width:1200px;"><img src="https://thumb.chuaxin.com/thumb_dXBsb2FkaW1nL3R2LzIwMjYvMDkvMjQvVEVTVF90dl81NTYuanBnfDUwMHw3NA.png" class="cover"></p>
 <div>
 <div style="margin-top:100px;width:max-content;position:relative;margin-top:155px;">
 <p class="movie_title"><span class="name">The Batman</span></p>
@@ -71,7 +75,7 @@
 <div class="tv_episode">
 <a href="javascript:;" tid="556" season="2" episode="1" play="mbpplay://type=play&amp;box_type=2&amp;id=556&amp;season=2&amp;episode=1&amp;uid=0&amp;uid_v2=REDACTED&amp;private_mode=0&amp;child_mode=0" class="start_app_episode watch_tab">
 <div style="height:128px;width:100%;position:relative;">
-<p class="chapter_img" style="background-image:url(&quot;https://thumb.chuaxin.com/thumb_TEST_ep_556_2_1.png&quot;),url(&quot;/static/img/tv_chapter.png&quot;);"></p>
+<p class="chapter_img" style="background-image:url(&quot;https://thumb.chuaxin.com/thumb_dXBsb2FkaW1nL3R2LzIwMjYvMDkvMjQvVEVTVF9lcF81NTZfMl8xLmpwZ3wzMDB8NzQ.png&quot;),url(&quot;/static/img/tv_chapter.png&quot;);"></p>
 <img src="/static/img/play_icon.png" width="20" class="play2">
 <p class="score"><img src="/static/img/score.png" width="13"><span>7.4</span></p>
 </div>
@@ -94,7 +98,7 @@
 <div class="tv_episode">
 <a href="javascript:;" tid="556" season="2" episode="2" play="mbpplay://type=play&amp;box_type=2&amp;id=556&amp;season=2&amp;episode=2&amp;uid=0&amp;uid_v2=REDACTED&amp;private_mode=0&amp;child_mode=0" class="start_app_episode watch_tab">
 <div style="height:128px;width:100%;position:relative;">
-<p class="chapter_img" style="background-image:url(&quot;https://thumb.chuaxin.com/thumb_TEST_ep_556_2_2.png&quot;),url(&quot;/static/img/tv_chapter.png&quot;);"></p>
+<p class="chapter_img" style="background-image:url(&quot;https://thumb.chuaxin.com/thumb_dXBsb2FkaW1nL3R2LzIwMjYvMDkvMjQvVEVTVF9lcF81NTZfMl8yLmpwZ3wzMDB8NzQ.png&quot;),url(&quot;/static/img/tv_chapter.png&quot;);"></p>
 <img src="/static/img/play_icon.png" width="20" class="play2">
 <p class="score"><img src="/static/img/score.png" width="13"><span>7.9</span></p>
 </div>
@@ -112,7 +116,7 @@
 <div class="tv_episode">
 <a href="javascript:;" tid="556" season="2" episode="3" play="mbpplay://type=play&amp;box_type=2&amp;id=556&amp;season=2&amp;episode=3&amp;uid=0&amp;uid_v2=REDACTED&amp;private_mode=0&amp;child_mode=0" class="start_app_episode watch_tab">
 <div style="height:128px;width:100%;position:relative;">
-<p class="chapter_img" style="background-image:url(&quot;https://thumb.chuaxin.com/thumb_TEST_ep_556_2_3.png&quot;),url(&quot;/static/img/tv_chapter.png&quot;);"></p>
+<p class="chapter_img" style="background-image:url(&quot;https://thumb.chuaxin.com/thumb_dXBsb2FkaW1nL3R2LzIwMjYvMDkvMjQvVEVTVF9lcF81NTZfMl8zLmpwZ3wzMDB8NzQ.png&quot;),url(&quot;/static/img/tv_chapter.png&quot;);"></p>
 <img src="/static/img/play_icon.png" width="20" class="play2">
 <p class="score"><img src="/static/img/score.png" width="13"><span>7.1</span></p>
 </div>
@@ -171,6 +175,95 @@
 </div>
 </div>
 <button class="random"><img src="/static/img/mobile/rand.png" width="16">Randomly Select One</button>
+</div>
+</div>
+<div class="watch_plan_bg" style="display:none;">
+<div class="watch_plan_con">
+<p class="close3"><img src="/static/img/mobile/fav_close.png" width="14"></p>
+<p class="title2">Watch Plan</p>
+<div class="season_episode_list">
+<div class="season_info" season="1" style="display:none;">
+<div class="watch_progress"><div class="left2"><p>Season 1 &#183; 93%</p><p>13/14 episodes watched</p></div><img class="lower2" src="/static/img/mobile/lower.png" width="14"></div>
+<div class="episode" season="1" episode="0"><p class="name">S01E00 - Building the Batman</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="1" episode="1"><p class="name">S01E01 - The Bat in the Belfry</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="2"><p class="name">S01E02 - Traction</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="3"><p class="name">S01E03 - Call of the Cobblepot</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="4"><p class="name">S01E04 - The Man Who Would Be Bat</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="5"><p class="name">S01E05 - The Big Chill</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="6"><p class="name">S01E06 - The Cat and the Bat</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="7"><p class="name">S01E07 - The Big Heat</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="8"><p class="name">S01E08 - Q &amp; A</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="9"><p class="name">S01E09 - The Rubber Face of Comedy</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="10"><p class="name">S01E10 - The Clayface of Tragedy</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="11"><p class="name">S01E11 - Topsy Turvy</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="12"><p class="name">S01E12 - Bird of Prey</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="1" episode="13"><p class="name">S01E13 - Rumble in the Rain</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+</div>
+<div class="season_info" season="2">
+<div class="watch_progress"><div class="left2"><p>Season 2 &#183; 15%</p><p>2/13 episodes watched</p></div><img class="lower2" src="/static/img/mobile/lower.png" width="14"></div>
+<div class="episode" season="2" episode="1"><p class="name">S02E01 - The Cat, the Bat and the Very Ugly</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="2"><p class="name">S02E02 - Riddled</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="2" episode="3"><p class="name">S02E03 - Fire and Ice</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="2" episode="4"><p class="name">S02E04 - The Laughing Bat</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="5"><p class="name">S02E05 - Pets</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="6"><p class="name">S02E06 - Swamped</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="7"><p class="name">S02E07 - Strange Minds</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="8"><p class="name">S02E08 - Grundy’s Night</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="9"><p class="name">S02E09 - The Butler Did It</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="10"><p class="name">S02E10 - Night and the City</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="11"><p class="name">S02E11 - JTV</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="12"><p class="name">S02E12 - Meltdown</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="2" episode="13"><p class="name">S02E13 - The Big Dummy</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+</div>
+<div class="season_info" season="3" style="display:none;">
+<div class="watch_progress"><div class="left2"><p>Season 3 &#183; 15%</p><p>2/13 episodes watched</p></div><img class="lower2" src="/static/img/mobile/lower.png" width="14"></div>
+<div class="episode" season="3" episode="1"><p class="name">S03E01 - Batgirl Begins, Part One</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="3" episode="2"><p class="name">S03E02 - Batgirl Begins, Part Two</p><img class="watch2" src="/static/img/mobile/finish2.png" width="22"></div>
+<div class="episode" season="3" episode="3"><p class="name">S03E03 - A Dark Knight to Remember</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="4"><p class="name">S03E04 - A Matter of Family</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="5"><p class="name">S03E05 - Team Penguin</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="6"><p class="name">S03E06 - Brawn</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="7"><p class="name">S03E07 - The Laughing Cats</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="8"><p class="name">S03E08 - Fleurs du Mal</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="9"><p class="name">S03E09 - Cash for Toys</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="10"><p class="name">S03E10 - Gotham’s Ultimate Criminal Mastermind</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="11"><p class="name">S03E11 - Thunder</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="12"><p class="name">S03E12 - Riddler’s Revenge</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="3" episode="13"><p class="name">S03E13 - The Icy Depths</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+</div>
+<div class="season_info" season="4" style="display:none;">
+<div class="watch_progress"><div class="left2"><p>Season 4 &#183; 0%</p><p>0/13 episodes watched</p></div><img class="lower2" src="/static/img/mobile/lower.png" width="14"></div>
+<div class="episode" season="4" episode="1"><p class="name">S04E01 - Artifacts</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="2"><p class="name">S04E02 - Seconds</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="3"><p class="name">S04E03 - The Everywhere Man</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="4"><p class="name">S04E04 - Two of a Kind</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="5"><p class="name">S04E05 - Clayfaces</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="6"><p class="name">S04E06 - The Breakout</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="7"><p class="name">S04E07 - The Joining, Part One</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="8"><p class="name">S04E08 - The Joining, Part Two</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="9"><p class="name">S04E09 - Rumors</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="10"><p class="name">S04E10 - Strange New World</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="11"><p class="name">S04E11 - Team Penguin Returns</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="12"><p class="name">S04E12 - Riddled Again</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="4" episode="13"><p class="name">S04E13 - Night of the Bat</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+</div>
+<div class="season_info" season="5" style="display:none;">
+<div class="watch_progress"><div class="left2"><p>Season 5 &#183; 0%</p><p>0/13 episodes watched</p></div><img class="lower2" src="/static/img/mobile/lower.png" width="14"></div>
+<div class="episode" season="5" episode="1"><p class="name">S05E01 - The Batman/Superman Story, Part One</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="2"><p class="name">S05E02 - The Batman/Superman Story, Part Two</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="3"><p class="name">S05E03 - Vertigo</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="4"><p class="name">S05E04 - Ring Toss</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="5"><p class="name">S05E05 - The Metal Face of Comedy</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="6"><p class="name">S05E06 - Attack of the Terrible Trio</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="7"><p class="name">S05E07 - White Heat</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="8"><p class="name">S05E08 - A Mirror Darkly</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="9"><p class="name">S05E09 - Joker Express</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="10"><p class="name">S05E10 - Lost Heroes, Part One</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="11"><p class="name">S05E11 - Lost Heroes, Part Two</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="12"><p class="name">S05E12 - What Goes Up</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+<div class="episode" season="5" episode="13"><p class="name">S05E13 - The End of the Batman</p><img class="watch2" src="/static/img/mobile/no_finish2.png" width="22"></div>
+</div>
+</div>
 </div>
 </div>
 </body>

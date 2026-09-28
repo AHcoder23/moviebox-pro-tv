@@ -46,8 +46,37 @@ var Icons = (function () {
 
 var Kit = (function () {
   var lazyTimer = null;
+  var tvUA = null;
 
   function el(tag, cls, text, parent) { return U.el(tag, cls, text, parent); }
+
+  /* ---------- TV performance mode ---------- */
+
+  /* A TV browser (the native player uses the same test). */
+  function isTV() {
+    if (tvUA === null) {
+      try { tvUA = /Tizen|SMART-TV|Web0S|NetCast/i.test(String(navigator.userAgent || '')); } catch (e) { tvUA = false; }
+    }
+    try { return tvUA || !!window.tizen; } catch (e2) { return tvUA; }
+  }
+
+  /* Prefs 'performance': 'on', 'off' or 'auto' (the default: on for TVs). App puts .mb-perf on #mbptv while it is on;
+     the kit loads smaller pictures and fewer at a time, and screens can ask for their calmer timings (timing()). */
+  function perf() {
+    var p = 'auto';
+    try { if (typeof Prefs !== 'undefined' && Prefs.get) p = Prefs.get('performance') || 'auto'; } catch (e) { p = 'auto'; }
+    if (p === 'on') return true;
+    if (p === 'off') return false;
+    return isTV();
+  }
+
+  /* Timings screens use, by name, as [normal, performance mode]: dwell = how long focus rests on a card before its
+     details are prefetched (Home's hero). */
+  var TIMINGS = { dwell: [450, 700] };
+  function timing(name) {
+    var t = TIMINGS[name];
+    return t ? t[perf() ? 1 : 0] : 0;
+  }
 
   function focusable(node, key, action) {
     node.setAttribute('data-f', '');
@@ -74,42 +103,131 @@ var Kit = (function () {
 
   function safeImage(url) { return typeof url === 'string' && /^https?:\/\//i.test(url) && url.length < 2048; }
 
-  /* Lazy <img>: the src is assigned only once the image is within about two viewports (see lazyCheck). */
+  /* ---------- Images ---------- */
+
+  var TMDB = /^(https?:\/\/image\.tmdb\.org\/t\/p\/)(original|w\d+)(\/[^?#]+)$/i;
+
+  /* The URL of an image at about w CSS pixels wide (1080p frame). The site's thumbnail service honours any width
+     (Site.thumb, when the adapter provides it); TMDB serves fixed sizes, so its art gets w780 (up to 780 px) or
+     w1280, never a larger file than the one it came as. Performance mode caps every width at 780. Other URLs, and
+     any width the adapter cannot produce, come back unchanged. */
+  function imgUrl(url, w) {
+    if (!safeImage(url)) return url;
+    w = Math.round(+w || 0);
+    if (!(w > 0)) return url;
+    if (w > 780 && perf()) w = 780;
+    var m = TMDB.exec(url);
+    if (m) {
+      var have = /^original$/i.test(m[2]) ? 1e9 : parseInt(m[2].slice(1), 10) || 1e9, want = w <= 780 ? 780 : 1280;
+      return have <= want ? url : m[1] + 'w' + want + m[3];
+    }
+    if (typeof Site !== 'undefined' && typeof Site.thumb === 'function') {
+      try { var t = Site.thumb(url, w); if (safeImage(t)) return t; } catch (e) {}
+    }
+    return url;
+  }
+
+  /* Full-screen backdrop art (hero, detail, playback): 1280 px, or 780 in performance mode. */
+  function backdrop(url) { return imgUrl(url, 1280); }
+
+  /* Loads in flight. Performance mode starts at most MAX_LOADS lazy images at once, nearest to the screen first; a
+     load that never finishes gives its slot back after SLOT_MS. */
+  var MAX_LOADS = 6, SLOT_MS = 10000;
+  var loads = { active: [], queue: [] };
+
+  function release(node) {
+    var i = U.indexOf(loads.active, node);
+    if (i < 0) return;
+    loads.active.splice(i, 1);
+    if (loads.queue.length) pump();
+  }
+
+  function startLoad(node, counted) {
+    U.toggleClass(node, 'mb-lazy', false);
+    if (!node.__src || node.getAttribute('src') === node.__src) return;
+    if (counted && U.indexOf(loads.active, node) < 0) { node.__mbAt = U.now(); loads.active.push(node); }
+    node.src = node.__src;
+  }
+
+  function pump() {
+    var now = U.now(), root = document.documentElement;
+    loads.active = U.filter(loads.active, function (n) { return root.contains(n) && now - (n.__mbAt || 0) < SLOT_MS && now >= (n.__mbAt || 0); });
+    while (loads.queue.length && loads.active.length < MAX_LOADS) {
+      var n = loads.queue.shift();
+      if (U.hasClass(n, 'mb-lazy') && root.contains(n)) startLoad(n, true);
+    }
+  }
+
+  /* The single image entry point: Kit.img(url, opts), or the older Kit.img(url, cls, parent, fallback | opts).
+     opts: {cls, parent, w: CSS pixels wide at 1080p (asks for that size, see imgUrl), fallback: another URL,
+     eager: load now instead of when it nears the screen}. On an error the image falls back once to the original URL
+     (when a sized one was asked for), then to the fallback, then shows the placeholder (.is-error). */
   function img(url, cls, parent, fallback) {
+    var o = {};
+    if (cls && typeof cls === 'object') o = cls;
+    else {
+      o = { cls: cls, parent: parent };
+      if (fallback && typeof fallback === 'object') { o.w = fallback.w; o.fallback = fallback.fallback; o.eager = fallback.eager; }
+      else o.fallback = fallback;
+    }
     var node = document.createElement('img');
-    node.className = 'mb-img' + (cls ? ' ' + cls : '');
+    node.className = 'mb-img' + (o.cls ? ' ' + o.cls : '');
     node.setAttribute('alt', '');
     node.setAttribute('draggable', 'false');
-    node.__fallback = safeImage(fallback) && fallback !== url ? fallback : '';
-    node.onload = U.guard(function () { U.toggleClass(node, 'is-loaded', true); U.toggleClass(node, 'is-error', false); }, 'img-load');
+    var chain = [];
+    function add(u) { if (safeImage(u) && U.indexOf(chain, u) < 0) chain.push(u); }
+    add(o.w ? imgUrl(url, o.w) : url);
+    add(url);
+    add(o.w ? imgUrl(o.fallback, o.w) : o.fallback);
+    add(o.fallback);
+    node.onload = U.guard(function () {
+      release(node);
+      U.toggleClass(node, 'is-loaded', true);
+      U.toggleClass(node, 'is-error', false);
+    }, 'img-load');
     node.onerror = U.guard(function () {
-      if (node.__fallback) { var f = node.__fallback; node.__fallback = ''; node.src = f; return; }
+      var next = node.__chain && node.__chain.length ? node.__chain.shift() : '';
+      if (next) { node.__src = next; node.__mbAt = U.now(); node.src = next; return; }
+      release(node);
       U.toggleClass(node, 'is-error', true);
       U.toggleClass(node, 'is-loaded', false);
     }, 'img-error');
-    if (safeImage(url)) { node.__src = url; U.toggleClass(node, 'mb-lazy', true); }
-    else if (node.__fallback) { node.__src = node.__fallback; node.__fallback = ''; U.toggleClass(node, 'mb-lazy', true); }
+    var first = chain.shift();
+    node.__chain = chain;
+    if (first) { node.__src = first; U.toggleClass(node, 'mb-lazy', true); }
     else U.toggleClass(node, 'is-error', true);
-    if (parent) parent.appendChild(node);
+    if (o.parent) o.parent.appendChild(node);
+    if (o.eager && first) loadNow(node);
     return node;
   }
 
-  /* Loads immediately (hero/backdrop art). */
+  /* Loads immediately, ahead of the lazy queue (hero and backdrop art). */
   function loadNow(node) {
     if (!node || !node.__src) return;
-    U.toggleClass(node, 'mb-lazy', false);
-    if (node.getAttribute('src') !== node.__src) node.src = node.__src;
+    startLoad(node, false);
   }
 
+  /* Two phases: read every rect first, then start the loads. Interleaving them would force one synchronous layout per
+     image (loading changes classes), which costs tens of milliseconds per row change on TV CPUs. Images within one
+     viewport beyond the screen load (half a viewport in performance mode, where they also queue, nearest first). */
   function lazyCheck(scope) {
     var list = U.qsa(scope || document.getElementById('mbptv'), 'img.mb-lazy');
     if (!list.length) return;
-    var vw = window.innerWidth || 1920, vh = window.innerHeight || 1080;
-    for (var i = 0; i < list.length; i++) {
+    var vw = window.innerWidth || 1920, vh = window.innerHeight || 1080, p = perf(), mx = p ? vw * 0.5 : vw, my = p ? vh * 0.5 : vh;
+    var hits = [], i;
+    for (i = 0; i < list.length; i++) {
       var r = list[i].getBoundingClientRect();
       if (!r.width && !r.height) continue;
-      if (r.right > -vw && r.left < vw * 2 && r.bottom > -vh && r.top < vh * 2) loadNow(list[i]);
+      if (r.right > -mx && r.left < vw + mx && r.bottom > -my && r.top < vh + my) {
+        list[i].__mbDist = Math.max(0, -r.right, r.left - vw) + Math.max(0, -r.bottom, r.top - vh) * 2;
+        list[i].__mbOrd = hits.length;
+        hits.push(list[i]);
+      }
     }
+    if (!p) { for (i = 0; i < hits.length; i++) startLoad(hits[i], false); return; }
+    hits.sort(function (a, b) { return a.__mbDist - b.__mbDist || a.__mbOrd - b.__mbOrd; });
+    loads.queue = hits;
+    pump();
   }
 
   /* Coalesces checks: one now-ish and one after transitions settle. */
@@ -155,6 +273,15 @@ var Kit = (function () {
     return '';
   }
 
+  /* The picture width a card asks for (CSS pixels at 1080p, with headroom for the focus scale): posters are 12em and
+     15em wide, landscape cards 22em. Performance mode asks for smaller files. */
+  function cardWidth(size) {
+    var p = perf();
+    if (size === 'wide') return p ? 500 : 780;
+    if (size === 'grid') return p ? 342 : 500;
+    return p ? 300 : 500;
+  }
+
   /* Title card. opts: {size: 'poster'|'grid'|'wide', zone: 'row:id', sub: bool, title: bool} */
   function card(item, opts) {
     opts = opts || {};
@@ -167,7 +294,9 @@ var Kit = (function () {
     var ph = el('div', 'mb-card-ph', null, art);
     el('span', 'mb-card-ph-title', item.title || '', ph);
     var src = size === 'wide' ? (item.backdrop || item.poster) : (item.poster || item.backdrop);
-    img(src, 'mb-card-img', art);
+    img(src, { cls: 'mb-card-img', parent: art, w: cardWidth(size) });
+    /* Landscape cards carry their title on the art (their row hides the title line below the card). */
+    if (size === 'wide') el('div', 'mb-card-label', item.title || '', art);
     var badge = badgeText(item);
     if (badge && size !== 'wide') el('span', 'mb-card-badge', badge, art);
     if (typeof item.progress === 'number' && item.progress >= 0) {
@@ -188,6 +317,14 @@ var Kit = (function () {
       }
     }
     return c;
+  }
+
+  /* Fills in a title learned later (for example a Featured banner whose page was fetched on focus). */
+  function setCardTitle(c, title) {
+    title = U.text(title);
+    if (!c || !title) return;
+    if (c.__item) c.__item.title = title;
+    U.each(U.qsa(c, '.mb-card-ph-title, .mb-card-title, .mb-card-label'), function (n) { n.textContent = title; });
   }
 
   /* "See all" tile at the end of a row. */
@@ -258,12 +395,21 @@ var Kit = (function () {
     return { top: a.top - b.top, left: a.left - b.left, height: a.height, width: a.width };
   }
 
+  /* A track's padding, read once per viewport width (a computed-style read on every key press costs TV CPUs time). */
+  function trackPad(track) {
+    var vw = window.innerWidth || 0, p = track.__mbPad;
+    if (!p || p.vw !== vw) {
+      var cs = window.getComputedStyle(track);
+      p = track.__mbPad = { vw: vw, l: parseFloat(cs.paddingLeft) || 0, r: parseFloat(cs.paddingRight) || 0 };
+    }
+    return p;
+  }
+
   /* Horizontal rows: the focused card sits at the row's content start, clamped at both ends. */
   function scrollTrack(track, node) {
     var view = track.parentNode;
     if (!view || !node || node.parentNode !== track) return;
-    var cs = window.getComputedStyle(track);
-    var padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+    var pad = trackPad(track), padL = pad.l, padR = pad.r;
     var last = track.lastElementChild || track.lastChild;
     var total = last ? last.offsetLeft + last.offsetWidth + padR : 0;
     var max = Math.max(0, total - view.clientWidth);
@@ -285,16 +431,22 @@ var Kit = (function () {
     return y;
   }
 
+  /* The root's em in px (0.8333vw), read once per viewport width. */
+  var emCache = { vw: -1, px: 0 };
   function em() {
+    var vw = window.innerWidth || 0;
+    if (emCache.vw === vw && emCache.px) return emCache.px;
     var r = document.getElementById('mbptv');
     var fs = r ? parseFloat(window.getComputedStyle(r).fontSize) : 0;
-    return fs || (window.innerWidth || 1920) * 0.008333;
+    if (fs) emCache = { vw: vw, px: fs };
+    return fs || (vw || 1920) * 0.008333;
   }
 
   return {
     el: el, focusable: focusable, zone: zone, button: button, setLabel: setLabel, img: img, loadNow: loadNow,
+    imgUrl: imgUrl, backdrop: backdrop, cardWidth: cardWidth, perf: perf, isTV: isTV, timing: timing,
     safeImage: safeImage, lazyCheck: lazyCheck, lazySoon: lazySoon, fmtRuntime: fmtRuntime, metaLine: metaLine,
-    genresText: genresText, progressBar: progressBar, card: card, moreTile: moreTile, chip: chip, spinner: spinner,
+    genresText: genresText, progressBar: progressBar, card: card, setCardTitle: setCardTitle, moreTile: moreTile, chip: chip, spinner: spinner,
     monogram: monogram, skeletonCards: skeletonCards, transform: transform, setX: setX, setY: setY, offsetIn: offsetIn,
     scrollTrack: scrollTrack, reveal: reveal, em: em
   };
@@ -352,14 +504,17 @@ var Focus = (function () {
 
   function gap(a1, a2, b1, b2) { return b2 < a1 ? a1 - b2 : b1 > a2 ? b1 - a2 : 0; }
 
+  /* Left/Right only consider candidates that share the current line (vertical overlap): moving sideways never jumps
+     to another line of a zone, so Right at the end of a line (or from the keyboard's wide bottom keys) leaves the
+     zone instead of landing on a key above it. */
   function nearest(from, list, dir) {
     var c = rect(from), best = null, bestScore = Infinity;
     for (var i = 0; i < list.length; i++) {
       var n = list[i];
       if (n === from) continue;
       var r = rect(n), primary, secondary;
-      if (dir === 'right') { if (cx(r) <= cx(c) + 1 || r.left < c.left + c.width * 0.5) continue; primary = Math.max(0, r.left - c.right); secondary = gap(c.top, c.bottom, r.top, r.bottom) * 3 + Math.abs(cy(r) - cy(c)) * 0.5; }
-      else if (dir === 'left') { if (cx(r) >= cx(c) - 1 || r.right > c.right - c.width * 0.5) continue; primary = Math.max(0, c.left - r.right); secondary = gap(c.top, c.bottom, r.top, r.bottom) * 3 + Math.abs(cy(r) - cy(c)) * 0.5; }
+      if (dir === 'right') { if (cx(r) <= cx(c) + 1 || r.left < c.left + c.width * 0.5 || gap(c.top, c.bottom, r.top, r.bottom) > 0) continue; primary = Math.max(0, r.left - c.right); secondary = Math.abs(cy(r) - cy(c)) * 0.5; }
+      else if (dir === 'left') { if (cx(r) >= cx(c) - 1 || r.right > c.right - c.width * 0.5 || gap(c.top, c.bottom, r.top, r.bottom) > 0) continue; primary = Math.max(0, c.left - r.right); secondary = Math.abs(cy(r) - cy(c)) * 0.5; }
       else if (dir === 'down') { if (cy(r) <= cy(c) + 1 || r.top < c.top + c.height * 0.5) continue; primary = Math.max(0, r.top - c.bottom); secondary = gap(c.left, c.right, r.left, r.right) * 3 + Math.abs(cx(r) - cx(c)) * 0.5; }
       else { if (cy(r) >= cy(c) - 1 || r.bottom > c.bottom - c.height * 0.5) continue; primary = Math.max(0, c.top - r.bottom); secondary = gap(c.left, c.right, r.left, r.right) * 3 + Math.abs(cx(r) - cx(c)) * 0.5; }
       var score = primary + secondary;
@@ -457,6 +612,52 @@ var Focus = (function () {
     }
   }
 
+  /* Poster grids ([data-zone="grid"]) navigate by index and column (section 6.3), from a cached item list, so a key
+     press costs the same with 40 or 600 loaded titles. The cache is rebuilt when the grid's children change, when the
+     focused card is not where the cache says, or when the viewport width changes. */
+  function isGrid(z) { return !!z && z.getAttribute('data-zone') === 'grid'; }
+
+  function gridCache(z, node) {
+    var c = z.__mbGrid, vw = window.innerWidth || 0;
+    if (c && c.n === z.childNodes.length && c.first === z.firstChild && c.last === z.lastChild &&
+        (!node || c.list[node.__mbIdx] === node)) {
+      if (c.vw !== vw) { c.vw = vw; c.cols = 0; }
+      return c;
+    }
+    var list = items(z);
+    for (var i = 0; i < list.length; i++) list[i].__mbIdx = i;
+    c = z.__mbGrid = { n: z.childNodes.length, first: z.firstChild, last: z.lastChild, list: list, cols: 0, vw: vw };
+    return c;
+  }
+
+  function gridCols(c) {
+    if (!c.cols) {
+      var list = c.list, top0 = list.length ? list[0].offsetTop : 0, k = 0;
+      while (k < list.length && list[k].offsetTop === top0) k++;
+      c.cols = Math.max(1, k);
+    }
+    return c.cols;
+  }
+
+  function gridStep(z, node, dir) {
+    var c = gridCache(z, node), list = c.list, i = node.__mbIdx;
+    if (list[i] !== node) return nearest(node, list, dir);
+    var cols = gridCols(c), n = list.length, row = Math.floor(i / cols);
+    if (dir === 'right') return i + 1 < n && Math.floor((i + 1) / cols) === row ? list[i + 1] : null;
+    if (dir === 'left') return i % cols > 0 ? list[i - 1] : null;
+    if (dir === 'up') return i - cols >= 0 ? list[i - cols] : null;
+    if (i + cols < n) return list[i + cols];
+    return row < Math.floor((n - 1) / cols) ? list[n - 1] : null;
+  }
+
+  /* {index, count} of a card in its grid (from the cache), or null. */
+  function gridInfo(node) {
+    var z = zoneOf(node);
+    if (!isGrid(z)) return null;
+    var c = gridCache(z, node);
+    return c.list[node.__mbIdx] === node ? { index: node.__mbIdx, count: c.list.length } : null;
+  }
+
   function move(dir) {
     var list = scopes();
     if (!list.length) return false;
@@ -468,6 +669,9 @@ var Focus = (function () {
     } else if (z && type === 'v' && (dir === 'up' || dir === 'down')) {
       var lv = items(z), j = U.indexOf(lv, cur);
       next = lv[j + (dir === 'down' ? 1 : -1)] || null;
+    } else if (z && type === 'g' && isGrid(z)) {
+      next = gridStep(z, cur, dir);
+      if (next && !shown(next)) next = nearest(cur, items(z), dir);
     } else if (z && type === 'g') {
       next = nearest(cur, items(z), dir);
     }
@@ -513,6 +717,6 @@ var Focus = (function () {
 
   return {
     configure: configure, set: set, move: move, current: current, keyOf: keyOf, byKey: byKey, firstIn: firstIn,
-    valid: valid, blur: blur, zoneOf: zoneOf, items: items, shown: shown, enter: enter
+    valid: valid, blur: blur, zoneOf: zoneOf, items: items, shown: shown, enter: enter, gridInfo: gridInfo
   };
 }());

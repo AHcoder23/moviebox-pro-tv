@@ -229,6 +229,52 @@ var Site = (function () {
 
   /* ---------- images and normalisers ---------- */
 
+  /* The site's thumbnail service: https://thumb.chuaxin.com/thumb_<B64>.png, where B64 is URL-safe base64 ('-' and
+     '_', no '=' padding) of "<path>|<width>|<quality>" (verified 2026-09-24: any width is honoured). The original
+     file is https://images.chuaxin.com/<path>. Recognised by the file name plus a payload that decodes to exactly that
+     shape, so the host may move (or be the offline mock's /__img/thumb/) without other URLs ever being rewritten. */
+  var THUMB_URL = /^(https?:\/\/[^?#]*\/)thumb_([A-Za-z0-9_\-]{8,1400})\.(png|jpe?g|webp)((?:[?#].*)?)$/i;
+  var THUMB_PAYLOAD = /^([^|\x00-\x1f]{1,900})\|(\d{1,5})(?:\|(\d{1,3}))?$/;
+
+  function b64decode(s) {
+    var t = String(s).replace(/-/g, '+').replace(/_/g, '/');
+    if (t.length % 4 === 1) return null;
+    while (t.length % 4) t += '=';
+    try { return typeof atob === 'function' ? atob(t) : null; } catch (e) { return null; }
+  }
+
+  function b64encode(s) {
+    try { return typeof btoa === 'function' ? btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : null; } catch (e) { return null; }
+  }
+
+  /* {prefix, ext, suffix, path, width, quality} for a thumbnail-service URL, else null. */
+  function thumbParts(url) {
+    var m = THUMB_URL.exec(String(url == null ? '' : url));
+    if (!m) return null;
+    var payload = b64decode(m[2]), p = payload ? THUMB_PAYLOAD.exec(payload) : null;
+    if (!p || !/\.[a-z0-9]{2,5}$/i.test(p[1]) || /\s/.test(p[1])) return null;
+    return { prefix: m[1], ext: m[3], suffix: m[4], path: p[1], width: toInt(p[2]), quality: p[3] == null ? -1 : toInt(p[3]) };
+  }
+
+  /* The same thumbnail at another width (and quality, default 80); any other URL, or one that does not decode, comes
+     back unchanged. */
+  function thumb(url, width, quality) {
+    var t = thumbParts(url), w = Math.round(+width);
+    if (!t || !(w > 0)) return url;
+    var q = Math.round(+quality);
+    q = q > 0 ? Math.min(q, 100) : 80;
+    var enc = b64encode(t.path + '|' + Math.min(w, 4096) + '|' + q);
+    return enc ? t.prefix + 'thumb_' + enc + '.' + t.ext + t.suffix : url;
+  }
+
+  /* The full-size original of a thumbnail (https://images.chuaxin.com/<path>); any other URL comes back unchanged. */
+  function original(url) {
+    var t = thumbParts(url);
+    if (!t) return url;
+    if (httpish(t.path)) return t.path;
+    return 'https://images.chuaxin.com/' + t.path.replace(/^\/+/, '');
+  }
+
   function realImage(src, base) {
     var u = trim(decodeEntities(src));
     if (!u || /^(?:data|javascript|about|blob):/i.test(u)) return '';
@@ -857,10 +903,92 @@ var Site = (function () {
       out.push({
         season: s, episode: e, code: code || ('S' + s + 'E' + e), title: textOf(titleEl), date: date, runtime: runtime,
         overview: overview, still: bgUrl(qs(ep, '.chapter_img'), base) || imgUrl(qs(ep, 'img.still'), base),
-        rating: normRating(textOf(qs(ep, '.score span') || qs(ep, '.score')))
+        rating: normRating(textOf(qs(ep, '.score span') || qs(ep, '.score'))), watched: false
       });
     });
     return out;
+  }
+
+  function byEpisode(a, b) { return (a.season - b.season) || (a.episode - b.episode); }
+
+  /* An attribute that holds a number, including 0 (S01E00 specials): -1 when absent or not a number. */
+  function numAttr(el, name) {
+    var v = trim(attr(el, name));
+    return /^\d{1,4}$/.test(v) ? toInt(v) : -1;
+  }
+
+  /* The watch-plan list on every TV page (hidden; the site opens it from the watch-plan button):
+     .season_episode_list .season_info[season=N] per season, each with .episode[season][episode] rows holding
+     p.name "S01E00 - Building the Batman" and img.watch2 (…/no_finish2.png while unwatched, another image once
+     watched), plus .watch_progress .left2 p lines "Season 1 · 0%" and "0/14 episodes watched". It lists every season,
+     including specials the season's own episode cards leave out. */
+  function seasonListOf(doc) {
+    var out = { all: {}, stats: {} };
+    var blocks = qsa(doc, '.season_episode_list .season_info');
+    if (!blocks.length) blocks = qsa(doc, '.season_info[season]');
+    U.each(blocks, function (b) {
+      var sn = numAttr(b, 'season'), list = [], seen = {};
+      U.each(qsa(b, '.episode'), function (row) {
+        if (U.hasClass(row, 'season_info')) return;
+        var name = textOf(qs(row, 'p.name') || qs(row, '.name'));
+        var m = /^S(\d{1,4})\s*E(\d{1,4})\b\s*(?:[-–—:|.]\s*)?(.*)$/i.exec(name);
+        var s = numAttr(row, 'season'), e = numAttr(row, 'episode');
+        if (s < 0) s = m ? toInt(m[1]) : sn;
+        if (e < 0) e = m ? toInt(m[2]) : -1;
+        if (s < 0 || e < 0 || seen[s + 'x' + e]) return;
+        seen[s + 'x' + e] = true;
+        var img = qs(row, 'img.watch2') || qs(row, 'img[src*="finish"]'), src = attr(img, 'src');
+        list.push({ season: s, episode: e, code: 'S' + s + 'E' + e, title: m ? U.text(m[3]) : name, watched: !!src && !/no_finish/i.test(src) });
+      });
+      if (sn < 0 && list.length) sn = list[0].season;
+      if (sn < 0) return;
+      list = U.filter(list, function (x) { return x.season === sn; });
+      list.sort(byEpisode);
+      if (!out.all.hasOwnProperty(sn) || out.all[sn].length < list.length) out.all[sn] = list;
+      var watched = 0, total = list.length, label = '';
+      U.each(list, function (x) { if (x.watched) watched++; });
+      var prog = qs(b, '.watch_progress .left2') || qs(b, '.watch_progress');
+      if (!prog) prog = U.find(qsa(doc, '.watch_progress'), function (w) { return new RegExp('^Season\\s*' + sn + '\\b', 'i').test(textOf(qs(w, 'p'))); }) || null;
+      U.each(qsa(prog, 'p'), function (p) {
+        var t = textOf(p), wm = /(\d+)\s*\/\s*(\d+)\s*episodes?/i.exec(t);
+        if (wm) { watched = toInt(wm[1]); total = toInt(wm[2]); } else if (!label && /\S/.test(t)) label = t;
+      });
+      out.stats[sn] = { watched: watched, total: total, label: label };
+    });
+    return out;
+  }
+
+  /* The season's episode cards plus any episode only the watch-plan list names (specials such as S01E00): those
+     become name-only entries (no still, date or overview). Every episode gets its watched mark. */
+  function mergeEpisodes(d) {
+    var list = d.allEpisodes[d.season] || [], byNum = {}, have = {};
+    U.each(list, function (x) { byNum[x.season + 'x' + x.episode] = x; });
+    U.each(d.episodes, function (ep) {
+      var x = byNum[ep.season + 'x' + ep.episode];
+      have[ep.season + 'x' + ep.episode] = true;
+      ep.watched = !!(x && x.watched);
+      if (x && !ep.title) ep.title = x.title;
+    });
+    U.each(list, function (x) {
+      if (have[x.season + 'x' + x.episode]) return;
+      d.episodes.push({ season: x.season, episode: x.episode, code: x.code, title: x.title, date: '', runtime: '', overview: '', still: '', rating: '', watched: x.watched });
+    });
+    d.episodes.sort(byEpisode);
+  }
+
+  /* The episode a show-level Play/Resume starts: an "S2E3"-style resume label on the page's Play button; else the first
+     unwatched episode (seasons and episodes from 1: specials are never picked on their own); else the first episode.
+     null when the page lists no episodes to choose from (the caller then lets the website decide). */
+  function nextEpisodeOf(d) {
+    var m = /S(\d{1,4})\s*E(\d{1,4})/i.exec(d.playLabel || '');
+    if (m && toInt(m[1]) > 0) return { season: toInt(m[1]), episode: toInt(m[2]), code: 'S' + toInt(m[1]) + 'E' + toInt(m[2]), resume: true };
+    var seasons = [];
+    for (var k in d.allEpisodes) if (d.allEpisodes.hasOwnProperty(k) && toInt(k) > 0 && d.allEpisodes[k].length) seasons.push(toInt(k));
+    seasons.sort(function (a, b) { return a - b; });
+    var flat = [];
+    U.each(seasons, function (s) { flat = flat.concat(d.allEpisodes[s]); });
+    var pick = U.find(flat, function (x) { return x.episode > 0 && !x.watched; }) || U.find(flat, function (x) { return x.episode > 0; }) || flat[0];
+    return pick ? { season: pick.season, episode: pick.episode, code: 'S' + pick.season + 'E' + pick.episode, resume: false } : null;
   }
 
   function blankDetail(kind, id, base) {
@@ -869,7 +997,7 @@ var Site = (function () {
       backdrop: '', backdropOriginal: '', runtime: '', certification: '', genres: [], update: '',
       ratings: { imdb: '', tomato: '', audience: '' }, overview: '', badges: [], audio: '', playLabel: '',
       playHref: originOf(base) + playPath(kind, id, 0, 0), sources: [], cast: [], related: [],
-      season: 0, seasons: [], episodes: [], partial: false
+      season: 0, seasons: [], episodes: [], allEpisodes: {}, seasonStats: {}, nextEpisode: null, partial: false
     };
   }
 
@@ -920,10 +1048,21 @@ var Site = (function () {
     if (kind === 'tv') {
       seasonsInto(doc, base, d, p.season);
       d.episodes = episodesOf(doc, base);
-      if (!d.season && d.episodes.length) {
-        d.season = d.episodes[0].season;
-        U.each(d.seasons, function (s) { s.current = s.number === d.season; });
+      var lists = seasonListOf(doc);
+      d.allEpisodes = lists.all;
+      d.seasonStats = lists.stats;
+      if (!d.season && d.episodes.length) d.season = d.episodes[0].season;
+      /* No season pills in the markup: the watch-plan list still names every season. */
+      if (!d.seasons.length) {
+        for (var sk in d.allEpisodes) {
+          if (d.allEpisodes.hasOwnProperty(sk) && toInt(sk) > 0) d.seasons.push({ number: toInt(sk), href: titleHref('tv', d.id, base) + '?season=' + toInt(sk), current: false });
+        }
+        d.seasons.sort(function (a, b) { return a.number - b.number; });
+        if (!d.season && d.seasons.length) d.season = d.seasons[0].number;
       }
+      U.each(d.seasons, function (s) { s.current = s.number === d.season; });
+      mergeEpisodes(d);
+      d.nextEpisode = nextEpisodeOf(d);
     }
     return d;
   }
@@ -996,11 +1135,13 @@ var Site = (function () {
     list: ['.contents'],
     library: ['.contents', 'li[title]'],
     movie: ['.movie_title .name', '.info img.cover', '.poster_bg', '.start_app', '.sidebarbg2'],
-    tv: ['.movie_title .name', '.info img.cover', '.start_app', '#season .tv_episode', '.season_list2'],
+    tv: ['.movie_title .name', '.info img.cover', '.start_app', '#season .tv_episode', '.season_list2', '.season_episode_list .season_info'],
     gate: ['.login_btn']
   };
 
-  function selfTest(doc, type) {
+  /* parsed (optional): the page's Site.home or Site.detail model when the caller already has it, so the page is not
+     parsed twice. */
+  function selfTest(doc, type, parsed) {
     var res = { ok: true, type: '', warnings: [], counts: {} };
     if (!doc || !doc.documentElement) { res.ok = false; res.warnings.push('no document'); return res; }
     type = type || pageType(null, doc);
@@ -1012,7 +1153,7 @@ var Site = (function () {
     });
     var critical = false;
     if (type === 'home') {
-      var h = home(doc);
+      var h = parsed && isArray(parsed.rows) ? parsed : home(doc);
       res.counts.rows = h.rows.length;
       res.counts.items = 0;
       U.each(h.rows, function (r) { res.counts.items += r.items.length; });
@@ -1033,7 +1174,7 @@ var Site = (function () {
       res.counts.chips = l.chips.length;
       if (!l.items.length) res.warnings.push(type + ': no cards');
     } else if (type === 'movie' || type === 'tv') {
-      var d = detail(doc);
+      var d = parsed && parsed.key && isArray(parsed.episodes) ? parsed : detail(doc);
       if (!d || !d.title) { critical = true; res.warnings.push(type + ': detail not parsed'); }
       else {
         res.counts.sources = d.sources.length;
@@ -1090,35 +1231,98 @@ var Site = (function () {
     return out;
   }
 
+  /* Containers the website's player lives in (JW Player on Samsung, video.js on desktop). */
+  var PLAYER_BOX = '#my_dialog, #player_box, #player_panel, .jwplayer, .jw-wrapper, .video-js';
+
+  function frameOf(v) {
+    try {
+      var win = v && v.ownerDocument && v.ownerDocument.defaultView;
+      return win && win !== window && win.frameElement ? win.frameElement : null;
+    } catch (e) { return null; }
+  }
+
+  /* The video sits inside a known player container, directly or through the same-origin iframe that holds it. */
+  function inPlayerBox(v) {
+    if (!v) return false;
+    if (U.closest(v, PLAYER_BOX)) return true;
+    var f = frameOf(v);
+    return !!(f && U.closest(f, PLAYER_BOX));
+  }
+
+  /* Videos inside our own root (the built-in player's full-screen <video>) are never the website's player. */
+  function allVideos() {
+    var shell = document.getElementById('mbptv');
+    var out = U.map(U.filter(visibleOnly(qsa(document, 'video')), function (v) { return !(shell && shell.contains(v)); }),
+      function (v) { return { v: v, area: videoArea(v) }; });
+    return out.concat(frameVideos());
+  }
+
+  /* The player's video: the largest visible one inside a known player container, else the largest visible one. */
   function liveVideo() {
-    var best = null, area = 0;
-    U.each(visibleOnly(qsa(document, 'video')), function (v) {
-      var r = v.getBoundingClientRect(), a = r.width * r.height;
-      if (a > area) { area = a; best = v; }
+    var best = null, area = 0, boxed = null, boxedArea = 0;
+    U.each(allVideos(), function (x) {
+      if (x.area > area) { area = x.area; best = x.v; }
+      if (x.area > boxedArea && inPlayerBox(x.v)) { boxedArea = x.area; boxed = x.v; }
     });
-    U.each(frameVideos(), function (x) { if (x.area > area) { area = x.area; best = x.v; } });
-    return best;
+    return boxed || best;
   }
 
   function videoArea(v) {
     if (!v) return 0;
     var r = v.getBoundingClientRect(), w = r.width, h = r.height;
-    var win = v.ownerDocument && v.ownerDocument.defaultView;
-    if (win && win !== window && win.frameElement) {
-      var fr = win.frameElement.getBoundingClientRect();
+    var f = frameOf(v);
+    if (f) {
+      var fr = f.getBoundingClientRect();
       w = Math.min(w, fr.width); h = Math.min(h, fr.height);
     }
     return w * h;
   }
 
-  function livePlayerOpen() {
+  /* A large video outside the known containers is the player only right after a play action (ctx.recent) or when it is
+     the video player mode already drives (ctx.current), and never when it looks like decoration: a looping video or a
+     muted autoplay one (a hero trailer). The muted check reads the attribute on purpose: JW Player falls back to muted
+     autoplay by setting the property, and that video is a real player. */
+  function videoCounts(v, ctx) {
+    if (inPlayerBox(v)) return true;
+    if (ctx.current && ctx.current === v) return true;
+    if (!ctx.recent) return false;
+    if (v.loop || v.hasAttribute('loop')) return false;
+    if (v.hasAttribute('muted') && v.hasAttribute('autoplay')) return false;
+    return true;
+  }
+
+  /* ctx (optional): {recent: a play action is pending or happened in the last seconds, current: the video player mode
+     already drives}. #my_dialog visible, or a visible video of at least 40% of the viewport that counts (above). */
+  function livePlayerOpen(ctx) {
+    ctx = ctx || {};
     var dlg = document.getElementById('my_dialog');
     if (dlg && U.isVisible(dlg)) return true;
-    var v = liveVideo();
-    if (!v) return false;
     var vw = window.innerWidth || document.documentElement.clientWidth || 1;
     var vh = window.innerHeight || document.documentElement.clientHeight || 1;
-    return videoArea(v) >= 0.4 * vw * vh;
+    var list = allVideos();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].area >= 0.4 * vw * vh && videoCounts(list[i].v, ctx)) return true;
+    }
+    return false;
+  }
+
+  /* The element that holds the website's player controls: the visible dialog, or the known container (or iframe)
+     around the player's video. null when the player's markup is unknown. */
+  function playerContainer() {
+    var dlg = document.getElementById('my_dialog');
+    if (dlg && U.isVisible(dlg)) return dlg;
+    var v = liveVideo();
+    if (!v) return null;
+    var f = frameOf(v);
+    var box = U.closest(f || v, PLAYER_BOX);
+    return box || f || null;
+  }
+
+  /* Hides an element the website shows; an inline !important wins over the site's own !important class rules, and
+     the site's next show() (a plain style.display assignment) replaces it again. */
+  function forceHide(el) {
+    if (U.isVisible(el)) el.style.display = 'none';
+    if (U.isVisible(el)) { try { el.style.setProperty('display', 'none', 'important'); } catch (e) {} }
   }
 
   function liveSourceItems() {
@@ -1146,20 +1350,22 @@ var Site = (function () {
       U.each(boxes, function (box) {
         var btn = visibleOnly(qsa(box, '.close'))[0] || qs(box, '.close');
         if (btn) click(qs(btn, 'img') || btn);
-        if (U.isVisible(box)) box.style.display = 'none';
+        forceHide(box);
       });
       return visibleOnly(qsa(document, '.sidebarbg2')).length === 0;
     },
     playerOpen: livePlayerOpen,
-    closePlayer: function () {
+    playerContainer: playerContainer,
+    closePlayer: function (ctx) {
       var btn = document.getElementById('dialog_close') || qs(document, '#jw_player_close_pc img');
       if (btn) click(btn);
-      if (!livePlayerOpen()) return true;
-      U.each(qsa(document, 'video'), function (v) { try { v.pause(); } catch (e) {} });
+      if (!livePlayerOpen(ctx)) return true;
+      var shell = document.getElementById('mbptv');   /* never the built-in player's own video */
+      U.each(qsa(document, 'video'), function (v) { if (!(shell && shell.contains(v))) { try { v.pause(); } catch (e) {} } });
       U.each(frameVideos(), function (x) { try { x.v.pause(); } catch (e2) {} });
       var dlg = document.getElementById('my_dialog');
       if (dlg) dlg.style.display = 'none';
-      return !livePlayerOpen();
+      return !livePlayerOpen(ctx);
     },
     video: liveVideo,
     blockingPopups: function () { return visibleOnly(qsa(document, POPUPS)); },
@@ -1167,7 +1373,7 @@ var Site = (function () {
       if (!el) return false;
       var btn = visibleOnly(qsa(el, CLOSE_SEL))[0] || qs(el, CLOSE_SEL);
       if (btn) click(btn.tagName === 'IMG' ? btn : (qs(btn, 'img') || btn));
-      if (U.isVisible(el)) el.style.display = 'none';
+      forceHide(el);
       return !U.isVisible(el);
     }
   };
@@ -1229,6 +1435,8 @@ var Site = (function () {
     search: total('search', search, function () { return { query: '', type: 'all', total: null, types: [], items: [], playlists: [], next: '', empty: true }; }),
     detail: total('detail', detail, null),
     source: total('source', source, function () { return { index: 0, quality: '', file: '', size: '', date: '' }; }),
+    thumb: function (u, w, q) { try { return thumb(u, w, q); } catch (e) { try { Log.warn('site:thumb', e); } catch (e2) {} return u; } },
+    original: function (u) { try { return original(u); } catch (e) { try { Log.warn('site:original', e); } catch (e2) {} return u; } },
     isGate: total('isGate', isGate, false),
     pageType: total('pageType', pageType, 'other'),
     suggestions: total('suggestions', suggestions, function () { return []; }),
@@ -1246,7 +1454,7 @@ var Site = (function () {
     url: wrapAll(url, {}, 'url.', emptyStr),
     live: wrapAll(live, {
       click: false, playButton: null, episodeButton: null, sourceItems: function () { return []; }, sourceList: function () { return []; },
-      sourcePickerOpen: false, closeSourcePicker: false, playerOpen: false, closePlayer: false, video: null,
+      sourcePickerOpen: false, closeSourcePicker: false, playerOpen: false, playerContainer: null, closePlayer: false, video: null,
       blockingPopups: function () { return []; }, dismissPopup: false
     }, 'live.', null)
   };

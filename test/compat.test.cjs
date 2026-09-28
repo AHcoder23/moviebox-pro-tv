@@ -128,6 +128,10 @@ async function bootSmoke(page) {
     await tvKey(40, 'ArrowDown');
     const f1 = await K.focusInfo(page);
     if (JSON.stringify(f0) === JSON.stringify(f1)) await K.fail(page, 'keyCode 40 (remote Down) should move focus');
+    // Back from a lower Home row returns to the first row first (section 6.3); the next Back asks to exit.
+    await tvKey(10009, 'XF86Back');
+    const f2 = await K.focusInfo(page);
+    if (!f2 || f2.zone !== f0.zone) await K.fail(page, 'keyCode 10009 from the second row should return to the first row (' + f0.zone + '), got ' + JSON.stringify(f2));
     await tvKey(10009, 'XF86Back');
     await K.waitUntil(page, '[data-dialog="exit"] after keyCode 10009 (remote Back)', () => !!document.querySelector('#mbptv [data-dialog="exit"]'), null, 3000);
     await tvKey(10009, 'XF86Back');

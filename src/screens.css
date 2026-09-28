@@ -1,0 +1,70 @@
+/* Screen additions (0.3.1), built after shell.css (tools/build.cjs) with the same tokens and rules: scoped under
+   #mbptv, em units (1em = 16px at 1080p), Chromium 47 safe (flexbox, margins, prefixed transforms).
+   Detail episodes: the season line, the loading state of a season switch, watched marks, the Continue Watching
+   progress and name-only episode cards. Settings: the list scrolls when it is taller than the screen. */
+
+/* "Season 2 · 13 episodes · [bar] 2 of 13 watched", above the episodes and aligned with the first card. */
+#mbptv .mb-season-info {
+  height: 2.2em; margin: 0 5em .55em 9em; white-space: nowrap; overflow: hidden;
+  display: -webkit-box; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
+}
+#mbptv .mb-season-name { font-size: 1.5em; font-weight: 700; color: #f5f5f7; }
+#mbptv .mb-season-count { margin-left: .9em; font-size: 1.25em; font-weight: 500; color: rgba(245, 245, 247, .6); }
+#mbptv .mb-season-watched {
+  margin-left: 1.6em; display: -webkit-box; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
+}
+#mbptv .mb-season-watched .mb-progress { width: 6.5em; margin-right: .75em; }
+#mbptv .mb-season-watched-text { font-size: 1.25em; font-weight: 500; color: rgba(245, 245, 247, .72); }
+
+/* A season that is loading: the previous episodes stay, dimmed, under a spinner. */
+#mbptv .mb-row--episodes .mb-track {
+  -webkit-transition: -webkit-transform .26s cubic-bezier(.2, .8, .2, 1), opacity .2s ease-out;
+  transition: transform .26s cubic-bezier(.2, .8, .2, 1), opacity .2s ease-out;
+}
+#mbptv .mb-row--episodes.is-loading .mb-track { opacity: .3; }
+#mbptv .mb-ep-spinner { position: absolute; left: 50%; top: 5.45em; margin-left: -1.75em; display: none; z-index: 2; }
+#mbptv .mb-row--episodes.is-loading .mb-ep-spinner { display: block; }
+
+/* Watched: a check at the top right of the picture. */
+#mbptv .mb-ep-check {
+  position: absolute; right: .7em; top: .7em; width: 2.1em; height: 2.1em; border-radius: 50%;
+  background: rgba(7, 7, 10, .78); color: #35c46a; display: none;
+}
+#mbptv .mb-ep-check .mb-ico { position: absolute; left: .3em; top: .3em; width: 1.5em; height: 1.5em; }
+#mbptv .mb-episode.is-watched .mb-ep-check { display: block; }
+
+/* The Continue Watching episode: a progress bar along the bottom edge of the picture. */
+#mbptv .mb-ep-progress { position: absolute; left: 0; right: 0; bottom: 0; }
+#mbptv .mb-ep-progress .mb-progress { height: .35em; border-radius: 0; background: rgba(255, 255, 255, .28); }
+#mbptv .mb-ep-progress .mb-progress-fill { border-radius: 0; }
+
+/* An episode the site lists by name only: a deliberate text card (code, title, a large faint number). */
+#mbptv .mb-ep-text {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%; padding: 1.15em 1.3em; overflow: hidden; white-space: normal;
+  background: #1a1a21;
+  background: -webkit-linear-gradient(top, #23232b 0%, #15151b 100%);
+  background: linear-gradient(to bottom, #23232b 0%, #15151b 100%);
+}
+#mbptv .mb-ep-text-code { position: relative; font-size: 1.0625em; font-weight: 800; letter-spacing: .06em; color: #e7bd68; white-space: nowrap; }
+#mbptv .mb-ep-text-title {
+  position: relative; margin-top: .5em; max-width: 11.5em; max-height: 3.75em; font-size: 1.5em; line-height: 1.25; font-weight: 700; color: #f5f5f7;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+#mbptv .mb-ep-text-num {
+  position: absolute; right: .12em; bottom: -.12em; font-size: 7em; line-height: 1; font-weight: 800; letter-spacing: -.04em;
+  color: rgba(245, 245, 247, .07);
+}
+#mbptv .mb-episode--text.is-focused .mb-ep-text { background: #2a2a33; }
+/* The focused text card's play button sits bottom left, clear of the title. */
+#mbptv .mb-episode--text .mb-ep-play { left: 1.3em; top: auto; bottom: 1.1em; margin: 0; }
+
+/* Performance mode: no fades on the rows. */
+#mbptv.mb-perf .mb-row--episodes .mb-track { -webkit-transition: -webkit-transform .2s cubic-bezier(.2, .8, .2, 1); transition: transform .2s cubic-bezier(.2, .8, .2, 1); }
+
+/* ---------- Settings: a list taller than the screen scrolls (by transform) inside this port ---------- */
+#mbptv .mb-settings-port { position: absolute; left: -1.5em; top: 0; width: 61em; bottom: 2.5em; overflow: hidden; }
+#mbptv .mb-settings-port .mb-list {
+  margin: 0 0 0 1.5em; padding-bottom: 1em;
+  -webkit-transition: -webkit-transform .22s cubic-bezier(.2, .8, .2, 1); transition: transform .22s cubic-bezier(.2, .8, .2, 1);
+}
+#mbptv.mb-perf .mb-settings-port .mb-list { -webkit-transition: none; transition: none; }

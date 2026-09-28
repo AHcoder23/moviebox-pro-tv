@@ -1,16 +1,18 @@
-// Api, Prefs and Session tests (docs/ARCHITECTURE.md section 5.3). Standalone: node test/api.test.cjs
-// Runs a bundle of src/00-core.js + 10-site.js + 20-api.js on mock-site pages; requests are counted in Playwright.
+// Api, Prefs and Session tests (docs/ARCHITECTURE.md section 5.3), plus the kit's image and performance-mode helpers
+// (section 6.1, 6.4). Standalone: node test/api.test.cjs
+// Runs a bundle of src/00-core.js + 10-site.js + 20-api.js + 30-ui-kit.js on mock-site pages; requests are counted in
+// Playwright. The page's user agent is a Tizen TV's, so performance mode 'auto' is on.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const { launch, openPage, makeRunner, mockSite, root } = require('./helpers.cjs');
 
-const FILES = ['00-core.js', '10-site.js', '20-api.js'];
+const FILES = ['00-core.js', '10-site.js', '20-api.js', '30-ui-kit.js'];
 function bundle(origin) {
   return ['(function () {', "'use strict';", "var VERSION = 'test';", 'var START_URL = ' + JSON.stringify(origin + '/') + ';', "var CSS_TEXT = '';"]
     .concat(FILES.map(f => fs.readFileSync(path.join(root, 'src', f), 'utf8')))
-    .concat(['window.__data = { U: U, Site: Site, Api: Api, Prefs: Prefs, Session: Session, Store: Store, Log: Log };', '}());'])
+    .concat(['window.__data = { U: U, Site: Site, Api: Api, Prefs: Prefs, Session: Session, Store: Store, Log: Log, Kit: Kit };', '}());'])
     .join('\n');
 }
 
@@ -261,7 +263,10 @@ t.test('detail: parsed model, memory cache hit, Api.meta persisted to localStora
   await call("Api.detail('movie', '40102', cb, { force: true })");
   assert.strictEqual(count(/\/movie\/40102$/), 1);
   const tv = await call("Api.detail('tv', '556', cb, { season: 2 })");
-  assert.deepStrictEqual([tv.res.season, tv.res.episodes.length, tv.res.key], [2, 3, 'tv:556']);
+  // The season's episode list is Site's business (test/site.test.cjs, test/episodes.test.cjs); here: season 2 was asked
+  // for, parsed and cached under the show's key.
+  assert.deepStrictEqual([tv.res.season, tv.res.key], [2, 'tv:556']);
+  assert.ok(tv.res.episodes.length >= 3 && tv.res.episodes.every(e => +e.season === 2), 'season 2 episodes: ' + JSON.stringify(tv.res.episodes.map(e => e.season + 'x' + e.episode)));
   assert.strictEqual(count(/\/tvshow\/556\?season=2$/), 1);
   const bad = await call("Api.detail('movie', '', cb)");
   assert.strictEqual(bad.err.code, 'bad-url');
@@ -347,7 +352,7 @@ t.test('prefetch callbacks: exactly once each — done, superseded, cached, inva
 t.test('Prefs: defaults, validation, persistence and change events', async () => {
   await at('/index/index/my_box');
   const d = await page.evaluate(() => window.__data.Prefs.all());
-  assert.deepStrictEqual(d, { quality: 'best', nativeRemote: true, autoplayNext: false, reduceMotion: false });
+  assert.deepStrictEqual(d, { quality: 'best', nativeRemote: true, nativePlayer: true, autoplayEpisodes: true, reduceMotion: false, performance: 'auto' });
   const r = await page.evaluate(() => new Promise(resolve => {
     const { Prefs } = window.__data, events = [];
     Prefs.onChange((name, value, old) => events.push([name, value, old]));
@@ -361,16 +366,78 @@ t.test('Prefs: defaults, validation, persistence and change events', async () =>
   }));
   assert.deepStrictEqual([r.setQ, r.bogus, r.setB, r.badBool, r.custom], ['1080p', '1080p', true, true, 'movies']);
   assert.deepStrictEqual(r.get, ['1080p', true, true, 'movies', undefined]);
-  assert.deepStrictEqual(r.stored, { quality: '1080p', nativeRemote: true, autoplayNext: false, reduceMotion: true, lastTab: 'movies' });
+  assert.deepStrictEqual(r.stored, { quality: '1080p', nativeRemote: true, nativePlayer: true, autoplayEpisodes: true, reduceMotion: true, performance: 'auto', lastTab: 'movies' });
   assert.deepStrictEqual(r.events, [['quality', '1080p', 'best'], ['reduceMotion', true, false], ['lastTab', 'movies', undefined]]);
   await at('/index/index/my_box', { clear: false });
   assert.deepStrictEqual(await page.evaluate(() => [window.__data.Prefs.get('quality'), window.__data.Prefs.get('reduceMotion')]), ['1080p', true]);
-  await page.evaluate(() => localStorage.setItem('mbptv:prefs:v1', '{"quality":"8k","autoplayNext":"true"}'));
+  await page.evaluate(() => localStorage.setItem('mbptv:prefs:v1', '{"quality":"8k","nativePlayer":"no","performance":"max","autoplayEpisodes":1}'));
   await at('/index/index/my_box', { clear: false });
-  assert.deepStrictEqual(await page.evaluate(() => window.__data.Prefs.all()), { quality: 'best', nativeRemote: true, autoplayNext: false, reduceMotion: false }, 'invalid stored values fall back to defaults');
+  assert.deepStrictEqual(await page.evaluate(() => window.__data.Prefs.all()), { quality: 'best', nativeRemote: true, nativePlayer: true, autoplayEpisodes: true, reduceMotion: false, performance: 'auto' }, 'invalid stored values fall back to defaults');
+  // A TV where any setting changed before 0.3.1 stored the retired autoplayNext: false. It is ignored (and dropped on
+  // the next write), so it can never switch episode autoplay off.
+  await page.evaluate(() => localStorage.setItem('mbptv:prefs:v1', '{"quality":"720p","nativeRemote":true,"autoplayNext":false,"reduceMotion":false}'));
+  await at('/index/index/my_box', { clear: false });
+  const old = await page.evaluate(() => {
+    const { Prefs } = window.__data;
+    const out = { all: Prefs.all(), set: Prefs.set('autoplayNext', true) };
+    Prefs.set('reduceMotion', true);
+    out.stored = JSON.parse(localStorage.getItem('mbptv:prefs:v1'));
+    return out;
+  });
+  assert.deepStrictEqual(old.all, { quality: '720p', nativeRemote: true, nativePlayer: true, autoplayEpisodes: true, reduceMotion: false, performance: 'auto' });
+  assert.strictEqual(old.set, undefined, 'the retired key cannot be set again');
+  assert.ok(!('autoplayNext' in old.stored), 'the retired key is dropped on the next write: ' + JSON.stringify(old.stored));
   await page.evaluate(() => localStorage.setItem('mbptv:prefs:v1', 'not json'));
   await at('/index/index/my_box', { clear: false });
   assert.strictEqual(await page.evaluate(() => window.__data.Prefs.get('quality')), 'best');
+});
+
+t.test('Prefs: choices, labels and describe() let Settings render any preference; next() cycles it', async () => {
+  await at('/index/index/my_box');
+  const r = await page.evaluate(() => new Promise(resolve => {
+    const { Prefs } = window.__data, events = [];
+    Prefs.onChange((name, value, old) => events.push([name, value, old]));
+    const out = {
+      legacy: Prefs.choices(),
+      quality: Prefs.choices('quality'),
+      performance: Prefs.choices('performance'),
+      nativePlayer: Prefs.choices('nativePlayer'),
+      autoplay: Prefs.choices('autoplayEpisodes'),
+      unknown: Prefs.choices('lastTab'),
+      dPerf: Prefs.describe('performance'),
+      dNative: Prefs.describe('nativePlayer'),
+      dAuto: Prefs.describe('autoplayEpisodes'),
+      dUnknown: Prefs.describe('nope'),
+      label: [Prefs.label('performance', 'on'), Prefs.label('quality', 'ask'), Prefs.label('nativePlayer', false)]
+    };
+    out.cycle = [Prefs.next('performance'), Prefs.next('performance'), Prefs.next('performance'), Prefs.next('nativePlayer'), Prefs.next('nativePlayer')];
+    out.after = Prefs.describe('performance');
+    setTimeout(() => { out.events = events; resolve(out); }, 50);
+  }));
+  assert.deepStrictEqual(r.legacy, ['ask', 'best', '1080p', '720p'], 'choices() without a name keeps returning the quality values');
+  assert.deepStrictEqual(r.quality.map(c => c.value), ['ask', 'best', '1080p', '720p']);
+  assert.deepStrictEqual(r.quality.map(c => c.label), ['Ask every time', 'Best available', '1080p', '720p']);
+  assert.deepStrictEqual(r.performance, [{ value: 'auto', label: 'Auto' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]);
+  assert.deepStrictEqual(r.nativePlayer, [{ value: true, label: 'On' }, { value: false, label: 'Off' }]);
+  assert.deepStrictEqual(r.autoplay, [{ value: true, label: 'On' }, { value: false, label: 'Off' }]);
+  assert.deepStrictEqual(r.unknown, []);
+  assert.strictEqual(r.dPerf.label, 'TV performance mode');
+  assert.strictEqual(r.dPerf.value, 'auto');
+  assert.strictEqual(r.dPerf.valueLabel, 'Auto');
+  assert.strictEqual(r.dPerf.toggle, false);
+  assert.ok(/TV/.test(r.dPerf.desc), r.dPerf.desc);
+  assert.strictEqual(r.dNative.label, 'Built-in player');
+  assert.strictEqual(r.dNative.toggle, true);
+  assert.strictEqual(r.dNative.value, true);
+  assert.strictEqual(r.dNative.valueLabel, 'On');
+  assert.strictEqual(r.dAuto.label, 'Autoplay next episode');
+  assert.strictEqual(r.dAuto.toggle, true);
+  assert.strictEqual(r.dUnknown, null);
+  assert.deepStrictEqual(r.label, ['On', 'Ask every time', 'Off']);
+  assert.deepStrictEqual(r.cycle, ['on', 'off', 'auto', false, true]);
+  assert.strictEqual(r.after.valueLabel, 'Auto');
+  assert.deepStrictEqual(r.events, [['performance', 'on', 'auto'], ['performance', 'off', 'on'], ['performance', 'auto', 'off'], ['nativePlayer', false, true], ['nativePlayer', true, false]]);
+  assert.deepStrictEqual(page.errors, []);
 });
 
 t.test('Session: save/take across a reload, expect matching, single use, 30-minute expiry', async () => {
@@ -471,6 +538,159 @@ t.test('guards: callbacks run exactly once even when they throw; bad input never
   assert.deepStrictEqual(r, { calls: 1, results: [null, null, false, false, false, [], 0], threw: false });
   assert.strictEqual(page.errors.length, 1, 'the consumer exception is logged, not swallowed silently');
   assert.ok(/consumer bug/.test(page.errors[0]));
+});
+
+t.test('Session.touch keeps a saved record valid while the viewer watches past the 30-minute TTL', async () => {
+  await at('/index/index/my_box');
+  // A record saved 29 minutes ago is still valid; touch() makes it fresh, so it survives another 29 minutes.
+  await page.evaluate(() => sessionStorage.setItem('mbptv:session:v1', JSON.stringify({ v: 1, t: Date.now() - 29 * 60 * 1000, stack: ['home', 'search'], expect: 'home', returnTo: location.origin + '/' })));
+  await at('/movie/1?play=1', { clear: false });
+  const touched = await page.evaluate(() => { const { Session } = window.__data; const ok = Session.touch(); return { ok, age: Date.now() - JSON.parse(sessionStorage.getItem('mbptv:session:v1')).t, rt: Session.returnTo() }; });
+  assert.strictEqual(touched.ok, true);
+  assert.ok(touched.age < 5000, 'touch() resets the record time, got an age of ' + touched.age + ' ms');
+  assert.strictEqual(touched.rt, origin + '/', 'returnTo is unchanged');
+  // Without a record, or with an expired one, touch() does nothing.
+  await page.evaluate(() => sessionStorage.setItem('mbptv:session:v1', JSON.stringify({ v: 1, t: Date.now() - 31 * 60 * 1000, stack: ['old'], expect: 'home' })));
+  await at('/movie/1?play=1', { clear: false });
+  assert.deepStrictEqual(await page.evaluate(() => [window.__data.Session.touch(), sessionStorage.getItem('mbptv:session:v1')]), [false, null]);
+});
+
+t.test('Log redacts search words, tokens and URL fragments centrally; entries stored by older versions too', async () => {
+  await at('/index/index/my_box');
+  const r = await page.evaluate(() => {
+    const { Log } = window.__data;
+    Log.clear();
+    Log.info('app', 'start https://www.movieboxpro.app/index/search?word=my+private+query&ref=abc123#frag-token');
+    Log.info('boot', '0.3.0 on /index/search?word=secret&type=movie&page=2');
+    Log.warn('api', { code: 'http-404', url: 'https://www.movieboxpro.app/index/search/autocomplate?q=my%20private%20query&limit=12' });
+    Log.warn('player', 'history.back to https://www.movieboxpro.app/tvshow/556?season=2&episode=1&play=1&token=XYZ');
+    return { text: JSON.stringify(Log.entries().map(e => e.msg)), stored: localStorage.getItem('mbptv:log:v1') };
+  });
+  for (const secret of ['my+private+query', 'my%20private%20query', 'abc123', 'frag-token', 'secret', 'XYZ']) {
+    assert.ok(r.text.indexOf(secret) < 0, 'the log must not hold "' + secret + '": ' + r.text);
+    assert.ok(r.stored.indexOf(secret) < 0, 'the persisted log must not hold "' + secret + '"');
+  }
+  for (const kept of ['type=movie', 'page=2', 'limit=12', 'season=2', 'episode=1', 'play=1', '/tvshow/556', 'http-404']) assert.ok(r.text.indexOf(kept) >= 0, 'the log should keep "' + kept + '": ' + r.text);
+  // An entry an older version stored unredacted is redacted when read back (the Diagnostics screen shows these).
+  await page.evaluate(() => localStorage.setItem('mbptv:log:v1', JSON.stringify([{ t: 1, level: 'warn', label: 'old', msg: 'GET /index/search?word=leaked#x' }])));
+  await at('/index/index/my_box', { clear: false });
+  assert.deepStrictEqual(await page.evaluate(() => window.__data.Log.persisted().map(e => e.msg)), ['GET /index/search?word=…']);
+});
+
+t.test('U.sameSite requires the page scheme, host (www or apex) and port; U.onOrigin rebuilds onto this origin', async () => {
+  await at('/index/index/my_box');
+  const r = await page.evaluate(() => {
+    const { U } = window.__data, o = location.origin, port = location.port;
+    const other = 'http://127.0.0.1:' + (+port + 1) + '/movie';
+    return {
+      same: U.sameSite(o + '/movie/1'), rel: U.sameSite('/movie/1'), otherPort: U.sameSite(other),
+      https: U.sameSite('https://127.0.0.1:' + port + '/movie'), js: U.sameSite('javascript:alert(1)'),
+      onOrigin: U.onOrigin('/movie/1?play=1#x'), onOther: U.onOrigin(other)
+    };
+  });
+  assert.deepStrictEqual(r, { same: true, rel: true, otherPort: false, https: false, js: false, onOrigin: origin + '/movie/1?play=1', onOther: '' });
+});
+
+t.test('Kit images: sized URLs (Site.thumb, TMDB sizes), the performance-mode cap and switch, and timings', async () => {
+  await at('/index/index/my_box');
+  const r = await page.evaluate(() => {
+    const { Kit, Prefs, Site } = window.__data, out = {};
+    const had = Site.thumb;
+    const tmdb = 'https://image.tmdb.org/t/p/original/abc.jpg', small = 'https://image.tmdb.org/t/p/w300/abc.jpg';
+    out.autoPerf = Kit.perf();
+    Prefs.set('performance', 'off');
+    out.off = { perf: Kit.perf(), orig: Kit.imgUrl(tmdb, 1280), w780: Kit.imgUrl(tmdb, 500), small: Kit.imgUrl(small, 1280), backdrop: Kit.backdrop(tmdb), dwell: Kit.timing('dwell'), card: [Kit.cardWidth('poster'), Kit.cardWidth('grid'), Kit.cardWidth('wide')] };
+    Prefs.set('performance', 'on');
+    out.on = { perf: Kit.perf(), backdrop: Kit.backdrop(tmdb), dwell: Kit.timing('dwell'), card: [Kit.cardWidth('poster'), Kit.cardWidth('grid'), Kit.cardWidth('wide')] };
+    Site.thumb = function (url, w) { return url.replace(/\.png$/, '') + '_w' + w + '.png'; };
+    out.thumb = Kit.imgUrl('https://thumb.chuaxin.com/thumb_X.png', 1280);
+    Prefs.set('performance', 'off');
+    out.thumbOff = Kit.imgUrl('https://thumb.chuaxin.com/thumb_X.png', 1280);
+    Site.thumb = function () { throw new Error('boom'); };
+    out.thumbThrows = Kit.imgUrl('https://thumb.chuaxin.com/thumb_X.png', 300);
+    Site.thumb = function () { return 'javascript:alert(1)'; };
+    out.thumbBad = Kit.imgUrl('https://thumb.chuaxin.com/thumb_X.png', 300);
+    Site.thumb = had;
+    out.unsafe = [Kit.imgUrl('javascript:alert(1)', 300), Kit.imgUrl('', 300), Kit.imgUrl('https://x.test/a.png', 0)];
+    Prefs.set('performance', 'auto');
+    return out;
+  });
+  assert.strictEqual(r.autoPerf, true, 'auto is on for a Tizen user agent');
+  assert.deepStrictEqual(r.off, { perf: false, orig: 'https://image.tmdb.org/t/p/w1280/abc.jpg', w780: 'https://image.tmdb.org/t/p/w780/abc.jpg', small: 'https://image.tmdb.org/t/p/w300/abc.jpg',
+    backdrop: 'https://image.tmdb.org/t/p/w1280/abc.jpg', dwell: 450, card: [500, 500, 780] });
+  assert.deepStrictEqual(r.on, { perf: true, backdrop: 'https://image.tmdb.org/t/p/w780/abc.jpg', dwell: 700, card: [300, 342, 500] });
+  assert.strictEqual(r.thumb, 'https://thumb.chuaxin.com/thumb_X_w780.png', 'performance mode caps widths at 780');
+  assert.strictEqual(r.thumbOff, 'https://thumb.chuaxin.com/thumb_X_w1280.png');
+  assert.strictEqual(r.thumbThrows, 'https://thumb.chuaxin.com/thumb_X.png');
+  assert.strictEqual(r.thumbBad, 'https://thumb.chuaxin.com/thumb_X.png');
+  assert.deepStrictEqual(r.unsafe, ['javascript:alert(1)', '', 'https://x.test/a.png']);
+  assert.deepStrictEqual(page.errors, []);
+});
+
+t.test('Kit images: a failing sized picture falls back once to the original, then to the placeholder', async () => {
+  await at('/index/index/my_box');
+  const r = await page.evaluate(() => new Promise(resolve => {
+    const { Kit, Site } = window.__data, had = Site.thumb;
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:300px';
+    document.body.appendChild(box);
+    Site.thumb = function (url, w) { return location.origin + '/missing/sized-' + w + '-' + url.split('/').pop(); };
+    const good = Kit.img(location.origin + '/__img/thumb/thumb_TEST_movie_1.png', { cls: 'a', parent: box, w: 300, eager: true });
+    const bad = Kit.img(location.origin + '/missing/original.png', { cls: 'b', parent: box, w: 300, eager: true, fallback: location.origin + '/missing/fallback.png' });
+    const none = Kit.img('javascript:alert(1)', 'c', box);
+    Site.thumb = had;
+    setTimeout(() => resolve({
+      good: { src: good.getAttribute('src').replace(location.origin, ''), loaded: good.classList.contains('is-loaded') },
+      bad: { src: bad.getAttribute('src').replace(location.origin, ''), error: bad.classList.contains('is-error') },
+      none: { src: none.getAttribute('src'), error: none.classList.contains('is-error') }
+    }), 1500);
+  }));
+  assert.deepStrictEqual(r.good, { src: '/__img/thumb/thumb_TEST_movie_1.png', loaded: true });
+  assert.deepStrictEqual(r.bad, { src: '/missing/fallback.png', error: true });
+  assert.deepStrictEqual(r.none, { src: null, error: true });
+  assert.strictEqual(count(/\/missing\/sized-300-thumb_TEST_movie_1\.png$/), 1, 'the sized URL was tried first');
+  assert.strictEqual(count(/\/missing\/sized-300-original\.png$/), 1);
+  assert.strictEqual(count(/\/missing\/original\.png$/), 1, 'then the original, once');
+});
+
+t.test('Kit images: performance mode loads at most 6 lazy pictures at once, nearest first; the rest follow as loads end', async () => {
+  await at('/index/index/my_box');
+  let release = null;
+  const held = [];
+  await page.route(/\/__hold\//, route => { held.push(route); if (release) release(); });
+  const r1 = await page.evaluate(() => {
+    const { Kit, Prefs } = window.__data;
+    Prefs.set('performance', 'on');
+    const box = document.createElement('div');
+    box.id = 'kitbox';
+    box.style.cssText = 'position:absolute;left:0;top:0;width:3000px';
+    document.body.appendChild(box);
+    for (let i = 0; i < 12; i++) {
+      const cell = document.createElement('div');
+      cell.style.cssText = 'position:absolute;top:0;width:100px;height:100px;left:' + (i < 10 ? i * 110 : 5000 + i * 110) + 'px';
+      box.appendChild(cell);
+      Kit.img(location.origin + '/__hold/' + i + '.png', { parent: cell }).style.cssText = 'display:block;width:100px;height:100px';
+    }
+    Kit.lazyCheck(box);
+    const started = Array.prototype.filter.call(box.querySelectorAll('img'), n => n.getAttribute('src')).map(n => n.getAttribute('src').replace(/^.*\/__hold\//, ''));
+    return { started };
+  });
+  assert.deepStrictEqual(r1.started, ['0.png', '1.png', '2.png', '3.png', '4.png', '5.png'], 'six loads, nearest first');
+  // Finish two loads: two more start, still never more than six at once; far-away pictures (beyond half a viewport) wait.
+  for (let i = 0; i < 20 && held.length < 6; i++) await sleep(50);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  await held.shift().fulfill({ status: 200, contentType: 'image/png', body: png });
+  await held.shift().fulfill({ status: 200, contentType: 'image/png', body: png });
+  await sleep(400);
+  const r2 = await page.evaluate(() => {
+    const box = document.getElementById('kitbox');
+    const out = { started: Array.prototype.filter.call(box.querySelectorAll('img'), n => n.getAttribute('src')).length, loaded: box.querySelectorAll('img.is-loaded').length };
+    window.__data.Prefs.set('performance', 'auto');
+    return out;
+  });
+  assert.deepStrictEqual(r2, { started: 8, loaded: 2 });
+  for (const h of held.splice(0)) await h.abort().catch(() => {});
+  await page.unroute(/\/__hold\//);
 });
 
 (async () => {

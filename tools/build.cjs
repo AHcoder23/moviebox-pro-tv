@@ -8,7 +8,9 @@ const outArg = process.argv.indexOf('--out');
 const out = outArg > 0 ? path.resolve(process.argv[outArg + 1]) : path.join(root, 'tv.js');
 const srcDir = path.join(root, 'src');
 const files = fs.readdirSync(srcDir).filter(f => /^\d\d-[\w-]+\.js$/.test(f)).sort();
-const css = fs.readFileSync(path.join(srcDir, 'shell.css'), 'utf8').replace(/\r\n/g, '\n');
+// shell.css first, then any other src/*.css in name order (for example player.css).
+const cssFiles = ['shell.css'].concat(fs.readdirSync(srcDir).filter(f => /\.css$/.test(f) && f !== 'shell.css').sort());
+const css = cssFiles.map(f => fs.readFileSync(path.join(srcDir, f), 'utf8').replace(/\r\n/g, '\n')).join('\n');
 const lines = [
   '/* MovieBox Pro TV ' + pkg.version + ' — independent TizenBrew module. MIT license. Built from src/; do not edit by hand. */',
   '(function () {',
@@ -23,4 +25,4 @@ for (const f of files) {
 }
 lines.push('}());', '');
 fs.writeFileSync(out, lines.join('\n'));
-console.log('Built ' + path.relative(root, out) + ' (' + fs.statSync(out).size + ' bytes) from ' + files.join(', ') + ' + shell.css');
+console.log('Built ' + path.relative(root, out) + ' (' + fs.statSync(out).size + ' bytes) from ' + files.join(', ') + ' + ' + cssFiles.join(', '));

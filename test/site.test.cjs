@@ -16,6 +16,14 @@ function bundle(origin) {
     .join('\n');
 }
 const fixture = name => fs.readFileSync(path.join(root, 'test', 'fixtures', name), 'utf8');
+// The site's thumbnail URL format: thumb_<URL-safe base64 of "path|width|quality">.png.
+const b64u = s => Buffer.from(s, 'utf8').toString('base64url');
+const unb64u = s => Buffer.from(s, 'base64url').toString('utf8');
+const thumbName = payload => 'thumb_' + b64u(payload) + '.png';
+const TV_POSTER = 'uploadimg/tv/2026/09/24/TEST_tv_556.jpg|500|74';
+const TV_STILL = n => 'uploadimg/tv/2026/09/24/TEST_ep_556_2_' + n + '.jpg|300|74';
+const S2_NAMES = ['The Cat, the Bat and the Very Ugly', 'Riddled', 'Fire and Ice', 'The Laughing Bat', 'Pets', 'Swamped', 'Strange Minds',
+  'Grundy’s Night', 'The Butler Did It', 'Night and the City', 'JTV', 'Meltdown', 'The Big Dummy'];
 
 const t = makeRunner('site');
 let server, browser, page, origin, code;
@@ -181,6 +189,7 @@ function checkMovie(d) {
   assert.strictEqual(d.season, 0);
   assert.deepStrictEqual(d.seasons, []);
   assert.deepStrictEqual(d.episodes, []);
+  assert.deepStrictEqual([d.allEpisodes, d.seasonStats, d.nextEpisode], [{}, {}, null]);
 }
 
 function checkShow(d, id) {
@@ -199,21 +208,42 @@ function checkShow(d, id) {
   assert.strictEqual(d.backdrop, origin + '/__img/tmdb/t/p/w1280/TEST_backdrop_' + id + '.jpg');
   assert.deepStrictEqual(d.badges, []);
   assert.strictEqual(d.playLabel, 'PLAY');
+  assert.strictEqual(d.poster, origin + '/__img/thumb/' + thumbName(TV_POSTER));
   assert.strictEqual(d.season, 2);
   assert.strictEqual(d.seasons.length, 5);
   assert.deepStrictEqual(d.seasons.map(s => s.number), [1, 2, 3, 4, 5]);
   assert.deepStrictEqual(d.seasons.map(s => s.current), [false, true, false, false, false]);
   assert.strictEqual(d.seasons[2].href, origin + '/tvshow/' + id + '?season=3');
-  assert.strictEqual(d.episodes.length, 3);
+  // Three rich episode cards (the fixture trims them) plus the ten more the watch-plan list names, in order.
+  assert.strictEqual(d.episodes.length, 13);
   assert.deepStrictEqual(d.episodes[0], {
     season: 2, episode: 1, code: 'S2E1', title: 'The Cat, the Bat and the Very Ugly', date: 'May 14, 2005', runtime: '21 min',
     overview: 'Penguin and Catwoman join forces to steal a pair of valuable gems. But when The Batman arrives to stop them, Catwoman is double-crossed by Penguin, who handcuffs her to the Dark Knight.',
-    still: origin + '/__img/thumb/thumb_TEST_ep_' + id + '_2_1.png', rating: '7.4'
+    still: origin + '/__img/thumb/' + thumbName(TV_STILL(1)), rating: '7.4', watched: false
   });
-  assert.deepStrictEqual(d.episodes.map(e => e.title), ['The Cat, the Bat and the Very Ugly', 'Riddled', 'Fire and Ice']);
-  assert.deepStrictEqual(d.episodes.map(e => e.runtime), ['21 min', '21 min', '20 min']);
-  assert.deepStrictEqual(d.episodes.map(e => e.code), ['S2E1', 'S2E2', 'S2E3']);
+  assert.deepStrictEqual(d.episodes.map(e => e.title), S2_NAMES);
+  assert.deepStrictEqual(d.episodes.map(e => e.episode), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  assert.deepStrictEqual(d.episodes.slice(0, 4).map(e => e.runtime), ['21 min', '21 min', '20 min', '']);
+  assert.deepStrictEqual(d.episodes.slice(0, 4).map(e => e.code), ['S2E1', 'S2E2', 'S2E3', 'S2E4']);
+  assert.deepStrictEqual(d.episodes.map(e => e.watched), [false, true, true, false, false, false, false, false, false, false, false, false, false]);
+  assert.deepStrictEqual(d.episodes[3], { season: 2, episode: 4, code: 'S2E4', title: 'The Laughing Bat', date: '', runtime: '', overview: '', still: '', rating: '', watched: false },
+    'an episode only the watch-plan list names is a name-only entry');
   assert.strictEqual(d.episodes[2].overview, 'Firefly and Mr. Freeze make an unlikely pair as they join forces to plunge Gotham into a permanent winter.');
+  // Every season from the watch-plan list, with watched marks and the site's own progress lines.
+  assert.deepStrictEqual(Object.keys(d.allEpisodes), ['1', '2', '3', '4', '5']);
+  assert.deepStrictEqual(Object.keys(d.allEpisodes).map(k => d.allEpisodes[k].length), [14, 13, 13, 13, 13]);
+  assert.deepStrictEqual(d.allEpisodes[1][0], { season: 1, episode: 0, code: 'S1E0', title: 'Building the Batman', watched: false });
+  assert.deepStrictEqual(d.allEpisodes[1][1], { season: 1, episode: 1, code: 'S1E1', title: 'The Bat in the Belfry', watched: true });
+  assert.strictEqual(d.allEpisodes[1][8].title, 'Q & A', 'entities decoded');
+  assert.deepStrictEqual(d.allEpisodes[1].map(e => e.watched).filter(Boolean).length, 13);
+  assert.deepStrictEqual(d.allEpisodes[3].slice(0, 3).map(e => e.watched), [true, true, false]);
+  assert.deepStrictEqual(d.seasonStats, {
+    1: { watched: 13, total: 14, label: 'Season 1 · 93%' }, 2: { watched: 2, total: 13, label: 'Season 2 · 15%' },
+    3: { watched: 2, total: 13, label: 'Season 3 · 15%' }, 4: { watched: 0, total: 13, label: 'Season 4 · 0%' },
+    5: { watched: 0, total: 13, label: 'Season 5 · 0%' }
+  });
+  // No resume label on the page: the first unwatched episode (the S1E0 special is never picked on its own).
+  assert.deepStrictEqual(d.nextEpisode, { season: 2, episode: 1, code: 'S2E1', resume: false });
   assert.deepStrictEqual(d.sources, [{ index: 0, quality: 'SD', file: 'The.Batman.S01E01.The.Bat.in.the.Belfry.NF.WEB-DL.DD+2.0.H.264-CtrlSD.mkv', size: '170.96 MB', date: '7/20/2020' }]);
   assert.deepStrictEqual(d.cast.map(c => [c.name, c.role, c.image === '']), [['Brandon Vietti', 'Director', true], ['Sam Liu', 'Director', false]]);
   assert.deepStrictEqual(d.related, []);
@@ -525,6 +555,29 @@ t.test('Site.live on the mock movie page: play, source picker, player, close', a
   assert.deepStrictEqual(page.errors, []);
 });
 
+t.test('Site.live ignores videos inside #mbptv (the built-in player is never the website player)', async () => {
+  await at('/movie/40102');
+  const r = await page.evaluate(() => {
+    const L = window.__data.Site.live;
+    const root = document.createElement('div');
+    root.id = 'mbptv';
+    root.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:5';
+    const v = document.createElement('video');
+    v.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;background:#000;display:block';
+    root.appendChild(v);
+    document.body.appendChild(root);
+    const out = { open: L.playerOpen({ recent: true }), openCurrent: L.playerOpen({ current: v }), video: L.video(), box: L.playerContainer() };
+    // The same video outside our root counts again.
+    document.body.appendChild(v);
+    out.outsideOpen = L.playerOpen({ recent: true });
+    out.outsideVideo = L.video() === v;
+    v.parentNode.removeChild(v);
+    root.parentNode.removeChild(root);
+    return out;
+  });
+  assert.deepStrictEqual(r, { open: false, openCurrent: false, video: null, box: null, outsideOpen: true, outsideVideo: true });
+});
+
 t.test('Site.live on the mock TV page: episode button starts playback', async () => {
   await at('/tvshow/556?season=2');
   const r = await page.evaluate(() => {
@@ -554,7 +607,7 @@ t.test('selfTest: every fixture passes; broken markup produces warnings', async 
     assert.strictEqual(r.type, type);
   }
   const auto = await page.evaluate(() => window.__data.Site.selfTest(document));
-  assert.deepStrictEqual([auto.ok, auto.type, auto.counts.episodes], [true, 'tv', 3]);
+  assert.deepStrictEqual([auto.ok, auto.type, auto.counts.episodes], [true, 'tv', 13]);
   const broken = await page.evaluate(async () => {
     const html = (await (await fetch('/')).text()).replace(/class="section"/g, 'class="block"');
     return window.__data.Site.selfTest(new DOMParser().parseFromString(html, 'text/html'), 'home');
@@ -666,6 +719,100 @@ t.test('normalisers: genres, runtime, ratings, image lists, TMDB backdrops, URL 
   assert.deepStrictEqual(r.urls, [o + '/index/search?word=the%20batman&type=tv&page=2', o + '/index/search?word=x', o + '/tvshow/556?season=2', o + '/movie/1',
     o + '/movie/1?play=1', o + '/tvshow/556?season=2&episode=3&play=1', o + '/tvshow/556?play=1', o + '/', o + '/movie', o + '/tvshow',
     o + '/index/index/my_box', o + '/index/search/autocomplate?q=ba%20t&limit=12', o + '/index/api/search_hot']);
+});
+
+t.test('thumb and original: real URL round trip, width and quality, host-independent, everything else untouched', async () => {
+  await at('/movie/40102');
+  const REAL_PATH = 'uploadimg/movie/2026/09/20/2026092019330165235.jpg';
+  const REAL = 'https://thumb.chuaxin.com/' + thumbName(REAL_PATH + '|500|74');
+  // The verified live example, encoded exactly as the site encodes it (no padding, URL-safe alphabet).
+  assert.strictEqual(REAL, 'https://thumb.chuaxin.com/thumb_dXBsb2FkaW1nL21vdmllLzIwMjYvMDkvMjAvMjAyNjA5MjAxOTMzMDE2NTIzNS5qcGd8NTAwfDc0.png');
+  const odd = 'https://thumb.chuaxin.com/' + thumbName('uploadimg/tv/2026/01/02/a~b>c?.png|300|74'); // '-' and '_' in the base64
+  assert.ok(/[-_]/.test(odd.split('thumb_')[1]), 'the odd path exercises the URL-safe alphabet');
+  const r = await page.evaluate(({ REAL, odd, mock, noQ }) => {
+    const { Site } = window.__data;
+    const enc = s => btoa(s).replace(/=+$/, '');
+    const bad = [null, undefined, '', 42, {}, [], 'not a url', 'https://image.tmdb.org/t/p/original/x.jpg', 'https://thumb.chuaxin.com/thumb_TEST_tv_705.png',
+      'https://thumb.chuaxin.com/thumb_!!!.png', 'https://thumb.chuaxin.com/thumb_' + enc('no-pipes-here.jpg') + '.png',
+      'https://thumb.chuaxin.com/thumb_' + enc('a|b|c') + '.png', 'https://thumb.chuaxin.com/thumb_' + enc('x y.jpg|500|74') + '.png',
+      'https://thumb.chuaxin.com/thumb_abcde.png', 'https://thumb.chuaxin.com/thumb_' + enc('pic.jpg|500|74') + '.gif',
+      'https://thumb.chuaxin.com/thumb_' + enc('pic.jpg|500|74') + '.png/extra', 'javascript:alert(1)//thumb_x.png'];
+    return {
+      same: Site.thumb(REAL, 500, 74),
+      w1280: Site.thumb(REAL, 1280), w300q60: Site.thumb(REAL, 300, 60), clamp: Site.thumb(REAL, 780.4, 150), huge: Site.thumb(REAL, 99999, 80),
+      query: Site.thumb(REAL + '?v=2#x', 640), mock: Site.thumb(mock, 640, 80), noQ: Site.thumb(noQ, 640), odd: Site.thumb(odd, 640),
+      badWidths: [0, -5, NaN, 'abc', null, undefined].map(w => Site.thumb(REAL, w)),
+      bad: bad.map(u => Site.thumb(u, 640, 80)), badOrig: bad.map(u => Site.original(u)),
+      orig: Site.original(REAL), origMock: Site.original(mock), origOdd: Site.original(odd), origSized: Site.original(Site.thumb(REAL, 1280))
+    };
+  }, { REAL, odd, mock: origin + '/__img/thumb/' + thumbName('uploadimg/tv/2026/09/24/TEST_ep_556_2_1.jpg|300|74'), noQ: 'https://thumb.chuaxin.com/' + thumbName('pic.jpg|500') });
+  const dec = u => { const m = /\/thumb_([A-Za-z0-9_-]+)\.png/.exec(u); assert.ok(m, 'thumb URL: ' + u); assert.ok(!/[=+/]/.test(m[1]), 'URL-safe, unpadded: ' + m[1]); return unb64u(m[1]); };
+  assert.strictEqual(r.same, REAL, 'round trip at the same width and quality');
+  assert.strictEqual(dec(r.w1280), REAL_PATH + '|1280|80', 'quality defaults to 80');
+  assert.ok(r.w1280.indexOf('https://thumb.chuaxin.com/thumb_') === 0);
+  assert.strictEqual(dec(r.w300q60), REAL_PATH + '|300|60');
+  assert.strictEqual(dec(r.clamp), REAL_PATH + '|780|100');
+  assert.strictEqual(dec(r.huge), REAL_PATH + '|4096|80');
+  assert.ok(/\.png\?v=2#x$/.test(r.query), 'query and fragment kept: ' + r.query);
+  assert.strictEqual(dec(r.query.split('?')[0]), REAL_PATH + '|640|80');
+  assert.ok(r.mock.indexOf(origin + '/__img/thumb/thumb_') === 0, 'another host keeps its prefix');
+  assert.strictEqual(dec(r.mock), 'uploadimg/tv/2026/09/24/TEST_ep_556_2_1.jpg|640|80');
+  assert.strictEqual(dec(r.noQ), 'pic.jpg|640|80', 'a payload without quality gains one');
+  assert.strictEqual(dec(r.odd), 'uploadimg/tv/2026/01/02/a~b>c?.png|640|80');
+  assert.deepStrictEqual(r.badWidths, Array(6).fill(REAL), 'no usable width: unchanged');
+  assert.deepStrictEqual(r.bad.slice(0, 7), [null, undefined, '', 42, {}, [], 'not a url'], 'non-URLs come back as given');
+  assert.deepStrictEqual(r.bad.slice(7), r.badOrig.slice(7), 'not a thumbnail: thumb and original both return the input');
+  const badInputs = r.badOrig.slice(7);
+  assert.strictEqual(badInputs[0], 'https://image.tmdb.org/t/p/original/x.jpg');
+  assert.strictEqual(badInputs[1], 'https://thumb.chuaxin.com/thumb_TEST_tv_705.png');
+  assert.ok(r.bad.slice(7).every(u => typeof u === 'string' && u.indexOf('fDY0MHw4MA') < 0), 'no malformed input was resized');
+  assert.strictEqual(r.orig, 'https://images.chuaxin.com/' + REAL_PATH);
+  assert.strictEqual(r.origSized, 'https://images.chuaxin.com/' + REAL_PATH);
+  assert.strictEqual(r.origMock, 'https://images.chuaxin.com/uploadimg/tv/2026/09/24/TEST_ep_556_2_1.jpg');
+  assert.strictEqual(r.origOdd, 'https://images.chuaxin.com/uploadimg/tv/2026/01/02/a~b>c?.png');
+  assert.deepStrictEqual(page.errors, []);
+});
+
+t.test('tv seasons: specials merge in as name-only episodes; resume labels, all-watched and missing lists pick the next episode', async () => {
+  await at('/movie/40102');
+  const html = fixture('tvshow.html');
+  // The same page as the site serves it for season 1 (episode cards for S1E1-E3; the watch-plan list is identical).
+  const season1 = html.replace(/tid="556" season="2" episode=/g, 'tid="556" season="1" episode=').replace(/season=2&amp;episode=/g, 'season=1&amp;episode=')
+    .replace(/>S2E(\d)</g, '>S1E$1<').replace('Season 2/5', 'Season 1/5').replace('<p class="active">2</p>', '<p class="">2</p>')
+    .replace('<a href="/tvshow/556?season=1"><p class="">1</p></a>', '<a href="/tvshow/556?season=1"><p class="active">1</p></a>');
+  const cases = {
+    season1,
+    resume: html.replace('<span style="color: #fff;">PLAY</span>', '<span style="color: #fff;">Continue S3 E5</span>'),
+    allWatched: html.replace(/no_finish2\.png/g, 'finish2.png'),
+    noList: html.replace(/<div class="watch_plan_bg"[\s\S]*<\/body>/, '</body>'),
+    noPills: html.replace(/<div class="season_bg"[\s\S]*?<button class="random">[\s\S]*?<\/div>\s*<\/div>/, '').replace('Season 2/5', '')
+  };
+  assert.notStrictEqual(cases.noPills, html);
+  const r = await page.evaluate(({ cases, o }) => {
+    const out = {};
+    for (const k in cases) out[k] = window.__data.Site.detail(new DOMParser().parseFromString(cases[k], 'text/html'), o + '/tvshow/556' + (k === 'season1' ? '?season=1' : k === 'noPills' ? '' : '?season=2'));
+    return out;
+  }, { cases, o: origin });
+  const s1 = r.season1;
+  assert.strictEqual(s1.season, 1);
+  assert.strictEqual(s1.episodes.length, 14);
+  assert.deepStrictEqual(s1.episodes[0], { season: 1, episode: 0, code: 'S1E0', title: 'Building the Batman', date: '', runtime: '', overview: '', still: '', rating: '', watched: false });
+  assert.deepStrictEqual(s1.episodes.map(e => e.episode), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  assert.deepStrictEqual(s1.episodes.slice(1, 4).map(e => [e.code, e.title, e.runtime, !!e.still, e.watched]),
+    [['S1E1', 'The Cat, the Bat and the Very Ugly', '21 min', true, true], ['S1E2', 'Riddled', '21 min', true, true], ['S1E3', 'Fire and Ice', '20 min', true, true]],
+    'the episode cards keep their own titles and gain the watched marks');
+  assert.ok(s1.episodes.slice(1).every(e => e.watched), 'season 1 E1-E13 are watched');
+  assert.deepStrictEqual(s1.nextEpisode, { season: 2, episode: 1, code: 'S2E1', resume: false });
+  assert.deepStrictEqual(r.resume.nextEpisode, { season: 3, episode: 5, code: 'S3E5', resume: true });
+  assert.strictEqual(r.resume.playLabel, 'Continue S3 E5');
+  assert.deepStrictEqual(r.allWatched.nextEpisode, { season: 1, episode: 1, code: 'S1E1', resume: false }, 'everything watched: start again at S1E1');
+  assert.ok(r.allWatched.episodes.every(e => e.watched));
+  assert.deepStrictEqual([r.noList.allEpisodes, r.noList.seasonStats, r.noList.nextEpisode, r.noList.episodes.length], [{}, {}, null, 3]);
+  assert.ok(r.noList.episodes.every(e => e.watched === false));
+  assert.strictEqual(r.noList.seasons.length, 5, 'the season pills still come from the page');
+  assert.deepStrictEqual(r.noPills.seasons.map(x => [x.number, x.current]), [[1, false], [2, true], [3, false], [4, false], [5, false]], 'no pills: seasons from the watch-plan list');
+  assert.strictEqual(r.noPills.seasons[3].href, origin + '/tvshow/556?season=4');
+  assert.strictEqual(r.noPills.episodes.length, 13);
 });
 
 t.test('totality: garbage input never throws and returns empty-but-valid shapes', async () => {

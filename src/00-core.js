@@ -198,9 +198,18 @@ var U = (function () {
 
   function siteHost(hostname) { return String(hostname || '').toLowerCase().replace(/^www\./, ''); }
 
+  /* Same scheme, same host (www or apex) and same port as the live page (section 7: only same-origin navigation). */
   function sameSite(url) {
     var u = parseUrl(url);
-    return /^https?:$/.test(u.protocol) && siteHost(u.hostname) === siteHost(location.hostname);
+    return /^https?:$/.test(u.protocol) && u.protocol === location.protocol && siteHost(u.host) === siteHost(location.host);
+  }
+
+  /* The URL rebuilt onto the live page's own origin (the www/apex variant maps to the current one), or '' when the
+     URL is not same-site. Navigation sinks assign this, never a raw URL taken from site markup. */
+  function onOrigin(url) {
+    if (!url || !sameSite(url)) return '';
+    var u = parseUrl(url);
+    return location.protocol + '//' + location.host + u.pathname + u.search;
   }
 
   function isVisible(node) {
@@ -277,7 +286,7 @@ var U = (function () {
     matches: matches, closest: closest, qs: qs, qsa: qsa, el: el, attr: attr, empty: empty, detach: detach,
     hasClass: hasClass, toggleClass: toggleClass, guard: guard, on: on, later: later, debounce: debounce,
     frame: frame, now: now, clamp: clamp, titleCase: titleCase, parseUrl: parseUrl, abs: abs, siteHost: siteHost,
-    sameSite: sameSite, isVisible: isVisible, parseHTML: parseHTML, parseJSON: parseJSON, onReady: onReady, svg: svg, xhr: xhr
+    sameSite: sameSite, onOrigin: onOrigin, isVisible: isVisible, parseHTML: parseHTML, parseJSON: parseJSON, onReady: onReady, svg: svg, xhr: xhr
   };
 }());
 
@@ -317,6 +326,19 @@ var Store = (function () {
 
 var Log = (function () {
   var entries = [], KEY = 'mbptv:log:v1', persisted = null;
+  /* Every message is redacted centrally (section 7): URL fragments are dropped and query values are masked unless the
+     parameter only names a title or a page, so search words, tokens and similar never reach the persisted log or the
+     Diagnostics screen, whichever call site (or error object) carried them. */
+  var KEEP_PARAMS = /^(?:id|season|episode|play|type|page|limit|box_type)$/i;
+  function redact(str) {
+    var s = String(str == null ? '' : str);
+    s = s.replace(/((?:https?:\/\/|\/)[^\s"'#<>]*)#[^\s"'<>]*/g, '$1');
+    return s.replace(/([?&])([^=&#\s"'<>?]+)=([^&#\s"'<>]*)/g, function (m, sep, k, v) {
+      var key = k;
+      try { key = decodeURIComponent(k); } catch (e) {}
+      return !v || KEEP_PARAMS.test(key) ? m : sep + k + '=\u2026';
+    });
+  }
   function describe(value) {
     if (value == null) return '';
     if (value.stack) return String(value.message || value) + ' @ ' + String(value.stack).split('\n').slice(0, 3).join(' | ');
@@ -324,7 +346,9 @@ var Log = (function () {
     return String(value).slice(0, 400);
   }
   function add(level, label, value) {
-    var entry = { t: U.now(), level: level, label: String(label || ''), msg: describe(value) };
+    var msg = '';
+    try { msg = redact(describe(value)); } catch (e0) { msg = '(unloggable value)'; }
+    var entry = { t: U.now(), level: level, label: String(label || ''), msg: msg };
     entries.push(entry);
     if (entries.length > 200) entries.shift();
     try {
@@ -341,7 +365,14 @@ var Log = (function () {
     warn: function (label, v) { return add('warn', label, v); },
     error: function (label, v) { return add('error', label, v); },
     entries: function () { return entries.slice(); },
-    persisted: function () { return (Store.local.get(KEY, []) || []).slice(); },
+    redact: redact,
+    /* Entries an older version stored before redaction existed are redacted on the way out as well. */
+    persisted: function () {
+      var list = Store.local.get(KEY, []) || [];
+      return U.map(Object.prototype.toString.call(list) === '[object Array]' ? list : [], function (e) {
+        return e && typeof e === 'object' ? { t: e.t, level: e.level, label: e.label, msg: redact(e.msg) } : { t: 0, level: 'info', label: '', msg: '' };
+      });
+    },
     clear: function () { entries = []; persisted = []; Store.local.remove(KEY); }
   };
 }());

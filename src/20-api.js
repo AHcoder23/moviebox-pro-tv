@@ -334,6 +334,15 @@ var Api = (function () {
     });
   }
 
+  /* The Detail already in memory for kind:id (a prefetch, the boot page or an earlier visit), or null. Never fetches. */
+  function cached(kind, id, season) {
+    kind = kindOf(kind);
+    id = String(id == null ? '' : id).replace(/[^\d]/g, '');
+    if (!id) return null;
+    season = kind === 'tv' ? Math.max(0, parseInt(season, 10) || 0) : 0;
+    return (season ? memGet(kind + ':' + id + ':s' + season) : null) || memGet(kind + ':' + id);
+  }
+
   /* Adds a Detail parsed elsewhere (for example from the live boot page) to both caches. */
   function remember(d) {
     try {
@@ -530,6 +539,7 @@ var Api = (function () {
     hot: guardAsync('hot', hot),
     detail: guardAsync('detail', detail),
     meta: guardSync('meta', meta, null),
+    cached: guardSync('cached', cached, null),
     remember: guardSync('remember', remember, false),
     prefetch: function (item, cb) {
       try { return prefetch(item, cb); } catch (e) {
@@ -550,16 +560,35 @@ var Api = (function () {
   };
 }());
 
-/* User preferences (localStorage mbptv:prefs:v1) with validation and an in-memory mirror. */
+/* User preferences (localStorage mbptv:prefs:v1) with validation and an in-memory mirror. Every preference the
+   Settings screen shows is described here (label, help text, choices and their labels), so the screen can render
+   and cycle any of them generically: Prefs.describe(name), Prefs.choices(name), Prefs.next(name). */
 var Prefs = (function () {
   var KEY = 'mbptv:prefs:v1';
-  var DEFAULTS = { quality: 'best', nativeRemote: true, autoplayNext: false, reduceMotion: false };
-  var CHOICES = { quality: ['ask', 'best', '1080p', '720p'] };
+  var DEFAULTS = { quality: 'best', nativeRemote: true, nativePlayer: true, autoplayEpisodes: true, reduceMotion: false, performance: 'auto' };
+  var CHOICES = { quality: ['ask', 'best', '1080p', '720p'], performance: ['auto', 'on', 'off'] };
+  /* Retired keys are ignored when read (older versions stored the whole object, so they linger on TVs). autoplayNext
+     was never read and was stored as false on every TV where a setting changed: autoplayEpisodes replaces it. */
+  var RETIRED = { autoplayNext: 1 };
+  var INFO = {
+    quality: { label: 'Preferred quality', values: { best: 'Best available', '1080p': '1080p', '720p': '720p', ask: 'Ask every time' },
+      desc: 'Used to choose a file automatically when a title has several. Choose “Ask every time” to pick yourself.' },
+    nativePlayer: { label: 'Built-in player',
+      desc: 'Plays movies and episodes in the TV app’s own player (recommended). Turn it off to use the website’s player instead.' },
+    autoplayEpisodes: { label: 'Autoplay next episode',
+      desc: 'Plays the next episode automatically when one ends, like Netflix. After three in a row without a button press it asks whether you are still watching.' },
+    performance: { label: 'TV performance mode', values: { auto: 'Auto', on: 'On', off: 'Off' },
+      desc: 'Lighter visuals for smoother scrolling: no shadows or long fades, smaller pictures and fewer loading at once. Auto turns it on for TVs.' },
+    nativeRemote: { label: 'Website remote controls',
+      desc: 'On website pages the TV app does not cover (sign-in, playlists), the arrow keys move a white focus ring and OK selects.' },
+    reduceMotion: { label: 'Reduce motion', desc: 'Turns off animations and fades. Helpful on older TVs.' }
+  };
   var cache = null, listeners = [];
 
   function has(obj, k) { return Object.prototype.hasOwnProperty.call(obj, k); }
 
   function valid(name, value) {
+    if (has(RETIRED, name)) return false;
     if (has(CHOICES, name)) return U.indexOf(CHOICES[name], value) >= 0;
     if (has(DEFAULTS, name) && typeof DEFAULTS[name] === 'boolean') return typeof value === 'boolean';
     if (value === undefined || typeof value === 'function') return false;
@@ -621,7 +650,51 @@ var Prefs = (function () {
     return function () { var i = U.indexOf(listeners, fn); if (i >= 0) listeners.splice(i, 1); };
   }
 
-  return { get: get, set: set, all: all, defaults: defaults, reset: reset, onChange: onChange, choices: function () { return CHOICES.quality.slice(); } };
+  function valueLabel(name, value) {
+    var info = has(INFO, name) ? INFO[name] : null;
+    if (typeof value === 'boolean') return value ? 'On' : 'Off';
+    if (info && info.values && has(info.values, String(value))) return info.values[String(value)];
+    return value == null ? '' : String(value);
+  }
+
+  /* choices(name): [{value, label}] in display order (a toggle is [On, Off]); [] for a free-form or unknown name.
+     choices() without a name keeps the old meaning: the quality values. */
+  function choices(name) {
+    if (name === undefined) return CHOICES.quality.slice();
+    name = String(name);
+    var list = has(CHOICES, name) ? CHOICES[name] : has(DEFAULTS, name) && typeof DEFAULTS[name] === 'boolean' ? [true, false] : [];
+    return U.map(list, function (v) { return { value: v, label: valueLabel(name, v) }; });
+  }
+
+  /* describe(name): {key, label, desc, value, valueLabel, toggle, choices} for a Settings row; null when unknown. */
+  function describe(name) {
+    name = String(name || '');
+    if (!has(DEFAULTS, name)) return null;
+    var info = has(INFO, name) ? INFO[name] : {}, v = get(name);
+    return { key: name, label: info.label || name, desc: info.desc || '', value: v, valueLabel: valueLabel(name, v),
+      toggle: typeof DEFAULTS[name] === 'boolean', choices: choices(name) };
+  }
+
+  /* next(name): moves a choice (or toggle) preference to its next value, wrapping; returns the new value. */
+  function next(name) {
+    var list = choices(name);
+    if (!list.length) return get(name);
+    var cur = get(name), i = 0;
+    for (var k = 0; k < list.length; k++) if (list[k].value === cur) { i = k; break; }
+    return set(name, list[(i + 1) % list.length].value);
+  }
+
+  function safe(fn, fallback) {
+    return function () {
+      try { return fn.apply(null, arguments); } catch (e) { Log.warn('prefs', e); return typeof fallback === 'function' ? fallback() : fallback; }
+    };
+  }
+
+  return {
+    get: get, set: set, all: all, defaults: defaults, reset: reset, onChange: onChange,
+    choices: safe(choices, function () { return []; }), describe: safe(describe, null), next: safe(next, null),
+    label: safe(valueLabel, '')
+  };
 }());
 
 /* Navigation state across real page loads (sessionStorage mbptv:session:v1), valid for 30 minutes.
@@ -694,5 +767,22 @@ var Session = (function () {
 
   function returnTo() { var r = peek(); return r ? String(r.returnTo || '') : ''; }
 
-  return { save: save, peek: peek, take: take, clear: clear, returnTo: returnTo, ttl: TTL };
+  /* Keeps a saved record fresh while the viewer watches (a film outlasts the 30-minute TTL): resets its time without
+     changing anything else. Returns false when there is no valid record. */
+  function touch() {
+    try {
+      var r = peek();
+      if (!r) return false;
+      r.t = U.now();
+      loaded = true;
+      mirror = r;
+      try { Store.session.set(KEY, r); } catch (e) {}
+      return true;
+    } catch (e2) {
+      Log.warn('session-touch', e2);
+      return false;
+    }
+  }
+
+  return { save: save, peek: peek, take: take, clear: clear, returnTo: returnTo, touch: touch, ttl: TTL };
 }());

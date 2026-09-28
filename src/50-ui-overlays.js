@@ -132,8 +132,9 @@ var Overlays = (function () {
       };
     });
     if (sources.length) el('div', 'mb-sheet-label', 'Files for this title', s.list);
+    var labels = sourceLabels(sources);
     U.each(sources, function (src, i) {
-      var r = sourceRow(s.list, src, i, false);
+      var r = sourceRow(s.list, src, i, false, labels);
       r.removeAttribute('data-source-index');
       r.setAttribute('data-file-index', String(i));
       r.__run = function () { App.closeLayer('sheet'); if (opts.onPick) opts.onPick({ file: src.file, quality: src.quality, size: src.size, index: i }); };
@@ -147,15 +148,46 @@ var Overlays = (function () {
 
   function qualityClass(q) { return q === '4K' || q === '8K' ? ' is-4k' : q === '1080p' || q === 'Original' ? ' is-1080' : ''; }
 
-  function sourceRow(list, s, i, preferred) {
+  /* A readable label from a release file name: the source, dynamic range, audio, codec and release group tokens
+     ('WEBRip \u00b7 DDP5.1 \u00b7 x264 \u00b7 GROUP'), matched as whole tokens (never by splitting on dots, which would break
+     'DDP5.1' or 'H.264'). Falls back to the raw name when nothing is recognised. */
+  var FILE_TOKENS = [
+    /\b(?:WEB-?DL|WEBRip|WEB|Blu-?Ray|BDRip|BRRip|Remux|HDTV|DVDRip|HDRip)\b/i,
+    /\b(?:HDR10\+?|HDR|DV|DoVi|Dolby[ .]?Vision)\b/i,
+    /\b(?:DDP?\+?\s?\d\.\d|DD\+?\s?\d\.\d|E-?AC-?3|TrueHD|Atmos|DTS-HD(?:[ .]?MA)?|DTS|AAC\d?(?:\.\d)?|FLAC)\b/i,
+    /\b(?:x26[45]|HEVC|H\.?26[45]|AV1|AVC)\b/i
+  ];
+  function fileLabel(name) {
+    var raw = U.text(name), base = raw.replace(/\.(?:mkv|mp4|avi|m4v|mov|ts|webm)$/i, '');
+    if (!base) return '';
+    var out = [];
+    U.each(FILE_TOKENS, function (re) {
+      var m = re.exec(base);
+      if (m) out.push(m[0].replace(/\s+/g, ''));
+    });
+    var group = /-([A-Za-z0-9]{2,20})$/.exec(base);
+    if (group && !/^(?:DL|\d+)$/i.test(group[1])) out.push(group[1]);
+    return out.length >= 2 ? out.join('  \u00b7  ') : raw;
+  }
+
+  function sourceRow(list, s, i, preferred, labels) {
     var r = el('div', 'mb-source', null, list);
     Kit.focusable(r, 'src|' + i + '|' + (s.file || ''));
     r.setAttribute('data-source-index', String(i));
     el('div', 'mb-qbadge' + qualityClass(s.quality), s.quality || 'File', r);
-    el('div', 'mb-source-file', s.file || ('File ' + (i + 1)), r);
+    var label = labels && labels[i] ? labels[i] : (s.file || ('File ' + (i + 1)));
+    var f = el('div', 'mb-source-file', label, r);
+    if (s.file) f.setAttribute('title', s.file);
     el('div', 'mb-source-meta', Kit.metaLine([s.size, s.date]), r);
     if (preferred) el('div', 'mb-source-pref', 'Preferred', r);
     return r;
+  }
+
+  /* Labels for a whole list: a row keeps its raw file name when its label would repeat another row's. */
+  function sourceLabels(list) {
+    var labels = U.map(list, function (s) { return fileLabel(s.file); }), seen = {};
+    U.each(labels, function (l) { seen['$' + l] = (seen['$' + l] || 0) + 1; });
+    return U.map(labels, function (l, i) { return l && seen['$' + l] === 1 ? l : (list[i].file || ''); });
   }
 
   /* Fallback parser when Site.live.sourceList is unavailable: quality icon, file name, size, date. */
@@ -204,6 +236,14 @@ var Overlays = (function () {
     return { index: Math.max(0, best), match: false };
   }
 
+  function addSourcesClass() {
+    var h = document.documentElement;
+    if (!U.hasClass(h, 'mbptv-sources')) h.className += ' mbptv-sources';
+  }
+
+  /* opts: {title, pick, auto, quiet}. With a preferred file that matches (or a one-time pick), the choice is made
+     automatically. quiet (the starting-playback overlay is up): no sheet at all; the overlay names the file for about a
+     second, during which Up or OK opens the full list instead (see expandSources). */
   function openSources(opts) {
     opts = opts || {};
     var list = liveSources();
@@ -211,28 +251,52 @@ var Overlays = (function () {
     if (src.open) closeSources(false);
     src.list = list;
     src.pick = opts.pick || null;
+    src.title = opts.title || '';
     var pref = Screens.pref('quality', 'best');
     var choice = preferred(list, pref, src.pick);
-    var s = sheet({ name: 'sources', kicker: 'Choose a file', title: opts.title || 'Play', sub: list.length + (list.length === 1 ? ' file available' : ' files available') + (pref !== 'ask' ? '  \u00b7  Preferred: ' + Screens.qualityLabel(pref) : '') });
+    var auto = !!((src.pick && choice.match) || (pref !== 'ask' && choice.match && opts.auto !== false));
+    src.open = true;
+    src.choice = choice;
+    addSourcesClass();
+    if (auto && opts.quiet && starting.node) {
+      var it = list[choice.index] || {};
+      setStartingHint('Playing ' + Kit.metaLine([it.quality || 'file', it.size]) + '  \u00b7  Press Up to choose another file');
+      src.autoTimer = U.later(function () { if (src.open && src.list === list && !src.sheet) chooseSource(choice.index); }, 900, 'source-auto');
+      return true;
+    }
+    buildSheet();
+    if (auto) {
+      src.autoTimer = U.later(function () { if (src.open && src.list === list) chooseSource(choice.index); }, 400, 'source-auto');
+    }
+    return true;
+  }
+
+  function buildSheet() {
+    var list = src.list, pref = Screens.pref('quality', 'best'), choice = src.choice || preferred(list, pref, src.pick);
+    var s = sheet({ name: 'sources', kicker: 'Choose a file', title: src.title || 'Play', sub: list.length + (list.length === 1 ? ' file available' : ' files available') + (pref !== 'ask' ? '  \u00b7  Preferred: ' + Screens.qualityLabel(pref) : '') });
     src.sheet = s;
-    var focus = null;
+    var focus = null, labels = sourceLabels(list);
     U.each(list, function (item, i) {
-      var r = sourceRow(s.list, item, i, i === choice.index && pref !== 'ask');
+      var r = sourceRow(s.list, item, i, i === choice.index && pref !== 'ask', labels);
       if (i === choice.index) focus = r;
       r.__run = function () { chooseSource(i); };
     });
-    src.open = true;
-    document.documentElement.className += ' mbptv-sources';
     App.openLayer('sheet', s.layer, {
       focus: focus, name: 'sources',
       onFocus: function (n) { sheetFocus(s, n); },
       onAnyKey: function () { clearTimeout(src.autoTimer); },
       onBack: function () { closeSources(true); App.cancelPlayback(); }
     });
-    var auto = (src.pick && choice.match) || (pref !== 'ask' && choice.match && opts.auto !== false);
-    if (auto) {
-      src.autoTimer = U.later(function () { if (src.open && src.list === list) chooseSource(choice.index); }, 400, 'source-auto');
-    }
+  }
+
+  /* The quiet automatic choice is pending: Up or OK on the starting overlay opens the full list instead. */
+  function autoPending() { return src.open && !src.sheet && !!src.list.length; }
+
+  function expandSources() {
+    if (!autoPending()) return false;
+    clearTimeout(src.autoTimer);
+    hideStarting();
+    buildSheet();
     return true;
   }
 
@@ -255,8 +319,10 @@ var Overlays = (function () {
     if (closeSite) { try { Site.live.closeSourcePicker(); } catch (e) {} }
     if (src.open) {
       src.open = false;
-      App.closeLayer('sheet');
+      if (src.sheet) App.closeLayer('sheet');
     }
+    src.sheet = null;
+    src.choice = null;
     document.documentElement.className = String(document.documentElement.className).replace(/\s*\bmbptv-sources\b/g, '');
     src.list = [];
   }
@@ -264,37 +330,49 @@ var Overlays = (function () {
   var sources = {
     open: openSources, close: closeSources,
     isOpen: function () { return src.open; },
+    autoPending: autoPending, expand: expandSources,
     choose: chooseSource
   };
 
   /* ---------- Starting-playback overlay ---------- */
 
-  var starting = { node: null };
+  var starting = { node: null, title: null, hint: null, img: null };
+  var STARTING_HINT = 'Waiting for the website\u2019s player  \u00b7  Press Back to cancel';
 
+  /* A second call while the overlay is up updates it in place (no second fade-in). */
   function showStarting(info) {
     var root = document.getElementById('mbptv');
     if (!root) return;
-    hideStarting();
     info = info || {};
+    var art0 = Kit.backdrop(info.backdrop);
+    if (starting.node && root.contains(starting.node)) {
+      if (info.title) starting.title.textContent = info.title;
+      starting.hint.textContent = info.hint || STARTING_HINT;
+      if (Kit.safeImage(art0) && starting.img.getAttribute('src') !== art0) starting.img.src = art0;
+      root.setAttribute('data-overlay', 'starting');
+      return;
+    }
+    hideStarting();
     var n = el('div', 'mb-starting');
     var art = el('div', 'mb-art', null, n);
     var img = el('img', 'mb-img mb-art-img', null, art);
     img.setAttribute('alt', '');
-    if (Kit.safeImage(info.backdrop)) {
-      img.onload = U.guard(function () { U.toggleClass(img, 'is-loaded', true); }, 'start-art');
-      img.src = info.backdrop;
-    }
+    img.onload = U.guard(function () { U.toggleClass(img, 'is-loaded', true); }, 'start-art');
+    if (Kit.safeImage(art0)) img.src = art0;
     el('div', 'mb-scrim-l', null, n);
     el('div', 'mb-scrim-b', null, n);
     var inner = el('div', 'mb-starting-inner', null, n);
     Kit.spinner(inner);
     el('div', 'mb-kicker', 'Starting playback', inner);
-    el('div', 'mb-display', info.title || '', inner);
-    el('div', 'mb-meta', info.hint || 'Waiting for the website\u2019s player  \u00b7  Press Back to cancel', inner);
+    starting.title = el('div', 'mb-display', info.title || '', inner);
+    starting.hint = el('div', 'mb-meta', info.hint || STARTING_HINT, inner);
+    starting.img = img;
     root.appendChild(n);
     root.setAttribute('data-overlay', 'starting');
     starting.node = n;
   }
+
+  function setStartingHint(text) { if (starting.node && starting.hint) starting.hint.textContent = text || STARTING_HINT; }
 
   function hideStarting() {
     if (starting.node) U.detach(starting.node);
@@ -308,7 +386,7 @@ var Overlays = (function () {
   var NATIVE_SEL = 'a[href], button, input, select, textarea, [onclick], [role="button"], [tabindex], li.play, .start_app, ' +
     '.start_app_episode, .login_more img, .close, .close2, .tips_close, .fav_close, .radio, label, .search_submit, ' +
     '.sidebarbg2 li, [oss_download_url]';
-  var web = { on: false, cur: null, ring: null, pill: null, timer: null, scope: null, onBack: null, here: false, typing: false, offScroll: null };
+  var web = { on: false, cur: null, ring: null, pill: null, timer: null, scope: null, onBack: null, onEscape: null, here: false, typing: false, offScroll: null };
 
   function isOurs(n) {
     for (var p = n; p && p.nodeType === 1; p = p.parentNode) {
@@ -371,8 +449,10 @@ var Overlays = (function () {
       web.pill.id = 'mbptv-pill';
       U.empty(web.pill);
       Kit.monogram(web.pill);
-      el('span', 'mbp-label', 'TV app', web.pill);
-      el('span', 'mbp-hint', 'Blue', web.pill);
+      /* A blue dot names the remote's Blue button; the label says what the pill does. */
+      var key = el('span', 'mbp-key', null, web.pill);
+      key.setAttribute('aria-hidden', 'true');
+      el('span', 'mbp-label', 'Back to TV app', web.pill);
       web.pill.setAttribute('role', 'button');
       U.on(web.pill, 'click', function (ev) { ev.preventDefault(); App.exitWebsite(); });
       document.body.appendChild(web.pill);
@@ -452,10 +532,12 @@ var Overlays = (function () {
     web.on = true;
     web.scope = opts.scope || null;
     web.onBack = opts.onBack || null;
+    web.onEscape = opts.onEscape || null;
     web.here = !!opts.here;
     web.typing = false;
     U.toggleClass(web.pill, 'is-visible', !web.scope);
-    webFocus(initialWeb());
+    var first = opts.initial && document.documentElement.contains(opts.initial) && rectOf(opts.initial).width > 1 ? opts.initial : null;
+    webFocus(first || initialWeb());
     clearInterval(web.timer);
     web.timer = setInterval(U.guard(function () {
       if (!web.on) return;
@@ -469,6 +551,7 @@ var Overlays = (function () {
     web.on = false;
     web.scope = null;
     web.onBack = null;
+    web.onEscape = null;
     clearInterval(web.timer);
     if (web.offScroll) { web.offScroll(); web.offScroll = null; }
     if (web.ring) U.toggleClass(web.ring, 'is-visible', false);
@@ -493,7 +576,12 @@ var Overlays = (function () {
   function webKey(name, ev) {
     var active = document.activeElement;
     var typing = textInput(active) && !isOurs(active);
-    if (name === 'blue' || name === 'info') { if (!web.scope) { App.exitWebsite(); return true; } }
+    /* Blue / Info always lead back to the TV app: from website view directly, and from a scoped website control
+       (a site popup, the player's controls) through that mode's own escape. */
+    if (name === 'blue' || name === 'info') {
+      if (!web.scope) { App.exitWebsite(); return true; }
+      if (web.onEscape) { web.onEscape(name); return true; }
+    }
     if (name === 'back') {
       if (typing) { try { active.blur(); } catch (e) {} web.typing = false; paintRing(); return true; }
       if (web.onBack) { web.onBack(); return true; }
@@ -533,6 +621,7 @@ var Overlays = (function () {
 var Player = (function () {
   var osd = null, els = {}, hideTimer = null, tickTimer = null, seekTimer = null, flashTimer = null;
   var active = false, info = {}, pendingSeek = null, streak = 0, lastDir = 0, lastSeekAt = 0;
+  var hintShows = 0, sample = { v: null, t: -1 }, stallTicks = 0, buffering = false;
 
   /* The site's player may put an element into browser fullscreen, which paints above everything outside it:
      keep the OSD inside that element while it is fullscreen, and on <body> otherwise. */
@@ -555,21 +644,23 @@ var Player = (function () {
     var inner = U.el('div', 'mbo-inner', null, osd);
     els.seek = U.el('div', 'mbo-seek', '', osd);
     els.title = U.el('div', 'mbo-title', '', inner);
+    els.sub = U.el('div', 'mbo-sub', '', inner);
     var row = U.el('div', 'mbo-row', null, inner);
     els.state = U.el('span', 'mbo-state', null, row);
     var bar = U.el('div', 'mbo-bar', null, row);
     els.fill = U.el('div', 'mbo-fill', null, bar);
     els.knob = U.el('div', 'mbo-knob', null, bar);
     els.time = U.el('div', 'mbo-time', '', row);
-    var hints = U.el('div', 'mbo-hints', null, inner);
-    function hint(key, label, icons) {
-      var h = U.el('span', 'mbo-hint', null, hints), k = U.el('span', 'mbo-key', key, h);
+    var hints = els.hints = U.el('div', 'mbo-hints', null, inner);
+    function hint(key, label, icons, cls) {
+      var h = U.el('span', 'mbo-hint', null, hints), k = U.el('span', 'mbo-key' + (cls ? ' ' + cls : ''), key, h);
       U.each(icons || [], function (name) { k.appendChild(Icons.el(name, 'mbo-kico')); });
       U.el('span', null, label, h);
     }
     hint('OK', 'Play / Pause');
     hint('', 'Seek 10 s, hold to go faster', ['chevronLeft', 'chevronRight']);
     hint('Back', 'Close player');
+    hint('', 'Player controls', null, 'mbo-key--blue');
     (host() || document.body).appendChild(osd);
     return osd;
   }
@@ -583,6 +674,14 @@ var Player = (function () {
     return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (s < 10 ? '0' : '') + s;
   }
 
+  function setState(want) {
+    if (els.state.__icon === want) return;
+    U.empty(els.state);
+    if (want === 'buffer') U.el('span', 'mbo-spin', null, els.state);
+    else els.state.appendChild(Icons.el(want));
+    els.state.__icon = want;
+  }
+
   function update() {
     if (!osd) return;
     var v = video();
@@ -593,32 +692,46 @@ var Player = (function () {
     els.knob.style.left = pct + '%';
     els.time.textContent = fmt(cur) + ' / ' + fmt(dur);
     var playing = v && !v.paused && !v.ended;
-    var want = playing ? 'pause' : 'play';
-    if (els.state.__icon !== want) { U.empty(els.state); els.state.appendChild(Icons.el(want)); els.state.__icon = want; }
+    setState(buffering ? 'buffer' : playing ? 'pause' : 'play');
   }
 
+  function shown() { return !!osd && U.hasClass(osd, 'is-visible'); }
+
+  /* Shows the OSD. It auto-hides after ms only while the video plays: paused, ended or buffering, it stays up, so a
+     frozen picture always says what it is doing (section 6.2). The key hints appear on the first two showings. */
   function show(ms) {
     ensure();
     els.title.textContent = info.title || '';
+    els.sub.textContent = info.sub || '';
+    els.sub.style.display = info.sub ? '' : 'none';
+    if (!shown()) hintShows++;
+    els.hints.style.display = hintShows <= 2 ? '' : 'none';
     update();
     U.toggleClass(osd, 'mb-reduce', !!Screens.pref('reduceMotion', false));
     U.toggleClass(osd, 'is-visible', true);
     clearTimeout(hideTimer);
+    hideTimer = null;
+    var v = video();
+    if (buffering || (v && (v.paused || v.ended))) return;
     hideTimer = U.later(hide, ms || 3000, 'osd-hide');
   }
 
-  function hide() { if (osd) U.toggleClass(osd, 'is-visible', false); }
+  function hide() {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    if (osd) U.toggleClass(osd, 'is-visible', false);
+  }
 
   function playVideo(v) {
     try { var p = v.play(); if (p && typeof p.then === 'function') p.then(null, function () {}); } catch (e) { Log.warn('player-play', e); }
   }
 
+  /* The OSD reads the state after the toggle took effect. */
   function toggle() {
     var v = video();
     if (!v) { show(); return; }
     if (v.paused || v.ended) playVideo(v); else { try { v.pause(); } catch (e) {} }
-    U.later(update, 60, 'osd-update');
-    show(v.paused ? 3000 : 3000);
+    U.later(function () { if (active) show(3000); }, 60, 'osd-toggle');
   }
 
   function flash(text) {
@@ -646,36 +759,61 @@ var Player = (function () {
       var vv = video();
       if (vv && pendingSeek != null) { try { vv.currentTime = pendingSeek; } catch (e) { Log.warn('seek', e); } }
       pendingSeek = null;
+      sample = { v: null, t: -1 };
       update();
     }, 280, 'seek-apply');
+  }
+
+  /* Every 500 ms while active (not only while the OSD shows): a video that should play, whose time has not moved for a
+     second and that reports it lacks data (readyState below HAVE_FUTURE_DATA) is buffering: a spinner in the OSD,
+     which stays up until it plays again. Both conditions, so a platform whose currentTime updates coarsely never
+     flickers the OSD. A video paused by any means brings the OSD back; a video resumed elsewhere lets it auto-hide
+     again. Polling, not media events: the website may swap its video element at any time. */
+  function tick() {
+    if (!active) return;
+    var v = video(), t = v ? v.currentTime : -1;
+    var still = !!(v && !v.paused && !v.ended && pendingSeek == null && sample.v === v && Math.abs(t - sample.t) < 0.05 && v.readyState < 3);
+    sample = { v: v, t: t };
+    stallTicks = still ? stallTicks + 1 : 0;
+    var was = buffering;
+    buffering = stallTicks >= 2;
+    if (buffering && !was) show();
+    else if (was && !buffering) show(3000);
+    else if (v && (v.paused || v.ended) && !shown()) show();
+    else if (shown() && v && !v.paused && !v.ended && !hideTimer && !buffering) show(3000);
+    else if (shown()) update();
   }
 
   function key(name, ev) {
     var v;
     switch (name) {
       case 'enter': case 'playpause': toggle(); return true;
-      case 'play': v = video(); if (v) playVideo(v); show(); return true;
-      case 'pause': v = video(); if (v) { try { v.pause(); } catch (e) {} } show(); return true;
+      case 'play': v = video(); if (v) playVideo(v); U.later(function () { if (active) show(3000); }, 60, 'osd-play'); return true;
+      case 'pause': v = video(); if (v) { try { v.pause(); } catch (e) {} } U.later(function () { if (active) show(); }, 60, 'osd-pause'); return true;
       case 'left': case 'rw': seek(-1, ev); return true;
       case 'right': case 'ff': seek(1, ev); return true;
       case 'up': case 'down': case 'info': show(4000); return true;
+      case 'blue': App.playerControls(); return true;
       case 'back': case 'stop': App.closePlayer(); return true;
       default: return true;
     }
   }
 
+  /* i: {title, sub} */
   function start(i) {
     info = i || {};
     active = true;
-    pendingSeek = null; streak = 0;
+    pendingSeek = null; streak = 0; stallTicks = 0; buffering = false;
+    sample = { v: null, t: -1 };
     ensure();
     show(3500);
     clearInterval(tickTimer);
-    tickTimer = setInterval(U.guard(function () { if (active && osd && U.hasClass(osd, 'is-visible')) update(); }, 'osd-tick'), 500);
+    tickTimer = setInterval(U.guard(tick, 'osd-tick'), 500);
   }
 
   function stop() {
     active = false;
+    buffering = false;
     clearInterval(tickTimer);
     clearTimeout(seekTimer);
     pendingSeek = null;
@@ -683,5 +821,5 @@ var Player = (function () {
     if (osd && document.body && osd.parentNode && osd.parentNode !== document.body) { try { document.body.appendChild(osd); } catch (e) {} }
   }
 
-  return { start: start, stop: stop, key: key, show: show, active: function () { return active; } };
+  return { start: start, stop: stop, key: key, show: show, active: function () { return active; }, buffering: function () { return buffering; } };
 }());

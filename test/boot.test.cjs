@@ -31,6 +31,8 @@ var App = {
     document.body.appendChild(r);
     var osd = document.createElement('div'); osd.id = 'mbptv-osd'; document.body.appendChild(osd);
     document.body.style.overflow = 'hidden';
+    /* The page-level states the real App sets per mode (scroll lock, player, source picker). */
+    h.className += ' site-own-class mbptv-lock mbptv-player mbptv-sources';
     throw new Error('stub App.start failure');
   },
   state: function () { return {}; }
@@ -270,7 +272,53 @@ async function settle(page, ms = 700) {
     expect(!usable.hitInsideShell && usable.overflow !== 'hidden', 'expected no overlay and no scroll lock', usable);
     expect(usable.siteClickWorked, "expected the website's own click handler to keep working", usable);
     expect(usable.bootErrorLogged, 'expected the failure in the persisted log (mbptv:log:v1)', usable);
+    // The page-level states are undone too: no mbptv-* class, no computed scroll lock, and no stylesheet left behind.
+    const page2 = await page.evaluate(() => ({
+      htmlClass: document.documentElement.className,
+      css: document.querySelectorAll('#mbptv-css').length,
+      overflow: [getComputedStyle(document.documentElement).overflow, getComputedStyle(document.body).overflow]
+    }));
+    expect(!/\bmbptv-/.test(page2.htmlClass) && /\bsite-own-class\b/.test(page2.htmlClass), 'expected every mbptv-* class removed from <html> and the site\'s own classes kept', page2);
+    expect(page2.css === 0, 'expected style#mbptv-css removed', page2);
+    expect(page2.overflow.indexOf('hidden') < 0, 'expected the page to scroll again (html and body overflow not hidden)', page2);
     expect(!page.errors.length, 'expected the failure to be caught, but got page errors: ' + page.errors.join(' | '));
+  });
+
+  // docs/ARCHITECTURE.md section 7: look-alike hosts and third-party pages that borrow MovieBox markup never get a shell;
+  // a page on an unknown host boots only with the site's own signature (a moved domain, or the offline mock).
+  async function onHost(url, html) {
+    const page = await tracked({ scripts: [BUNDLE_OK] });
+    const u = new URL(url);
+    await page.route(u.origin + '/**', r => r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html }));
+    await page.goto(url);
+    await settle(page);
+    return domState(page);
+  }
+
+  test('look-alike hosts and third-party sign-in pages with MovieBox-like markup are left untouched', async () => {
+    const cases = [
+      ['https://movieboxpro.evil.example/', '<!doctype html><html><head><title>x</title></head><body><p>plain</p></body></html>'],
+      ['https://movieboxpro.zendesk.example/hc/en-us/signin', '<!doctype html><html><head><title>Sign in - MovieBoxPro</title></head><body><form><input name="u"><input type="password" name="p"></form></body></html>'],
+      ['https://login.idp.example/oauth/authorize', '<!doctype html><html><head><title>Sign in</title></head><body><button class="login_btn">Sign in</button><a class="start_app">Continue</a><div class="contents"><div class="section">x</div></div></body></html>'],
+      ['https://news.example/review', '<!doctype html><html><head><title>Our MovieBoxPro review</title></head><body><p>text</p></body></html>']
+    ];
+    for (const [url, html] of cases) {
+      const s = await onHost(url, html);
+      expect(s.roots === 0 && s.starts === 0 && !s.flag, 'expected no shell on ' + url, s);
+    }
+  });
+
+  test('an unknown host boots only with the site signature: its title, top navigation or the Private Garden gate', async () => {
+    const cases = [
+      ['https://moviebox-new.example/', '<!doctype html><html><head><title>MovieBoxPro</title></head><body><p>home</p></body></html>'],
+      ['https://moviebox-new.example/movie/1', '<!doctype html><html><head><title>The Batman - MovieBoxPro</title></head><body><p>detail</p></body></html>'],
+      ['https://moviebox-new.example/x', '<!doctype html><html><head><title>x</title></head><body><div id="top_nav_home">Home</div></body></html>'],
+      ['https://moviebox-new.example/gate', '<!doctype html><html><head><title>Welcome</title></head><body><div class="login_btn"><a href="/index/login/qrcode">QR</a></div></body></html>']
+    ];
+    for (const [url, html] of cases) {
+      const s = await onHost(url, html);
+      expect(s.roots === 1 && s.starts === 1, 'expected one shell on ' + url, s);
+    }
   });
 
   await run();

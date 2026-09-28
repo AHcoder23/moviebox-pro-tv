@@ -1,0 +1,53 @@
+<script type="text/javascript">
+console.log('0.0.0.0');
+$(function() {
+    $('#next_episode').remove();
+    console.log('oss_group:');
+    var srtMap = {};
+    var sources = [{"type":"video\/mp4","file":"https:\/\/usa7-as01.shegu.net\/vip\/p1\/org_tv\/1\/7\/17417\/1\/tv.17417.S1E1.original.2621023.20220224235459.mp4?KEY1=REDACTED&KEY2=REDACTED&KEY7=REDACTED&KEY8=REDACTED&KEY0=REDACTED","label":"ORG","mp4_id":886357,"h265":0,"width":1920,"height":1080,"bitstream":8484,"size":2,"hdr":0,"fps":25},{"type":"application\/x-mpegURL","file":"https:\/\/hls.shegu.net\/2353127.m3u8?sign=REDACTED&t=REDACTED&client=mbp&KEY2=REDACTED&KEY7=REDACTED&KEY8=REDACTED&IP=REDACTED","label":"AUTO","mp4_id":2353127,"h265":0,"width":0,"height":0,"bitstream":0,"size":0,"hdr":0,"fps":0},{"type":"application\/x-mpegURL","file":"https:\/\/hls.shegu.net\/2353127.m3u8?quality=1080p&sign=REDACTED&t=REDACTED&client=mbp&KEY2=REDACTED&KEY7=REDACTED&KEY8=REDACTED&IP=REDACTED","label":"1080p","mp4_id":2353127,"h265":0,"width":1920,"height":1080,"bitstream":8484,"size":2,"hdr":0,"fps":25},{"type":"application\/x-mpegURL","file":"https:\/\/hls.shegu.net\/2353127.m3u8?quality=720p&sign=REDACTED&t=REDACTED&client=mbp&KEY2=REDACTED&KEY7=REDACTED&KEY8=REDACTED&IP=REDACTED","label":"720p","mp4_id":2353127,"h265":0,"width":0,"height":0,"bitstream":0,"size":0,"hdr":0,"fps":0},{"type":"application\/x-mpegURL","file":"https:\/\/hls.shegu.net\/2353127.m3u8?quality=360p&sign=REDACTED&t=REDACTED&client=mbp&KEY2=REDACTED&KEY7=REDACTED&KEY8=REDACTED&IP=REDACTED","label":"360p","mp4_id":2353127,"h265":0,"width":0,"height":0,"bitstream":0,"size":0,"hdr":0,"fps":0}];
+    var mp4_id = 886357;
+    var imdb_id = 'tt11987472';
+    var next_season = '1';
+    var next_episode = '2';
+        var tid = 17417;
+    var current_season = 1;
+    var current_episode = 1;
+        //var sources = [{"type":"video\/mp4","file":"https://sh1-source.shegu.net:8443/vip/p1/tv_mp4_h264/7/6/76/1/tv.76.S1E1.360p.H264.20190423031649.mp4?KEY1=REDACTED&KEY2=REDACTED","label":"1080p","mp4_id":127361}];
+    var seconds = 31;
+    var maxPlayedTime = 0;
+    var maxPlayedRuntime = 0;
+    var current_sid = 0;
+            var skips = '{"start":-1,"start_type":"other","start_is_multi":0,"end":-1,"end_type":"other","end_is_multi":0,"start_top_list":[],"end_top_list":[]}';
+        skips = $.parseJSON(skips);
+        var is_hls = false;
+        is_hls = true;
+    var quality_list = [];
+        var is_vip = 1;
+        var m3u8_url = 'https://hls.shegu.net/2353127.m3u8?sign=REDACTED&t=REDACTED&client=mbp&KEY2=REDACTED&KEY7=REDACTED&KEY8=REDACTED&IP=REDACTED'
+
+    // EAC3 在部分设备/原生 HLS 上会卡住  (the site appends audio=aac to HLS URLs on Samsung/LG TVs)
+    function appendAudioAacParam(src) {
+        var u = String(src || '');
+        if (!u || /[?&]audio=aac(?:&|$)/.test(u)) return u;
+        return u + (u.indexOf('?') !== -1 ? '&' : '?') + 'audio=aac';
+    }
+    /* ... about 190 KB of JW Player setup, subtitle and skip-intro code trimmed ... */
+    window.save_enent = function(){
+        var time = thePlayer.getPosition();
+        var runtime = thePlayer.getDuration();
+        time = parseInt(time);
+        if (time == seconds) { return false; }
+        seconds = time;
+        var post = {"type":"tv","tid":17417,"season":1,"episode":1};
+        post.over = runtime - time < 300 ? 1: 0;
+        post.seconds = time;
+                post.mp4_id = mp4_id
+                $.ajax({
+            type : 'POST',
+            url : "/index/index/tv_progress",
+            dataType : 'json',
+            data : post
+        });
+    }
+});
+</script>

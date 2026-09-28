@@ -171,6 +171,9 @@ function parseCookies(header) {
   return out;
 }
 
+let extra = null;
+try { extra = require('./mock-extra.cjs'); } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e; }
+
 function start(opts = {}) {
   const tvjs = opts.tvjs || path.join(root, 'tv.js');
   const injectTag = opts.inject ? '<script src="/tv.js"></script>' : '';
@@ -184,6 +187,8 @@ function start(opts = {}) {
       return handle();
     } catch (e) { send(500, 'text/plain', String(e.stack || e)); }
     function handle() {
+      // Optional extra mock routes (for example the native player endpoints in tools/mock-extra.cjs).
+      if (extra && extra.handle && extra.handle(u, query, cookies, req, res, send, { read: read, localizeImages: localizeImages })) return;
       if (u.pathname === '/tv.js') return send(200, 'application/javascript; charset=utf-8', fs.readFileSync(tvjs, 'utf8'));
       if (u.pathname === '/__mock/site.js') return send(200, 'application/javascript; charset=utf-8', SITE_SCRIPT);
       if (u.pathname === '/__mock/signout') return send(302, 'text/plain', '', { 'Set-Cookie': 'mockgate=1; Path=/', Location: '/' });
